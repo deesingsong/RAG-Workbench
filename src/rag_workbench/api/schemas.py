@@ -193,6 +193,8 @@ class AppConfigResponse(BaseModel):
     autoseed_sample: bool = False
     app_name: str
     version: str
+    revision: str | None = None
+    revision_source: str = "unavailable"
     dense_available: bool
     reranking_available: bool
     supported_modes: list[str]

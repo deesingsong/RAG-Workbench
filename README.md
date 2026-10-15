@@ -248,6 +248,11 @@ Cloud runs one Streamlit process and cannot run a separate FastAPI process:
   fresh instance still has something to search. The **Evaluation Lab**,
   **Failure Explorer** and **Performance Lab** show the committed datasets under
   `datasets/` and the committed experiment artifacts under `benchmarks/recorded/`.
+- The **Deployment diagnostics** expander on the Evaluation Lab reports the
+  backend `version` and its separate build `revision` (plus how it was resolved:
+  `git`, `git-file` or `source-hash`) and compares the revision to the source
+  tree on disk. If a hot reload left an older backend process running, the
+  mismatch appears as a warning instead of the app silently serving stale code.
 
 To deploy:
 
@@ -454,7 +459,7 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/vectors/status?profile_id=` | Reconcile vector points against SQLite chunks. |
 | `POST` | `/v1/vectors/rebuild` | `{profile_id?}` or `{all_profiles: true}` → rebuild from SQLite. |
 | `POST` | `/v1/vectors/reconcile` | `{profile_id, repair}` → detect and optionally repair drift. |
-| `GET` | `/v1/config` | Deployment capabilities: `read_only`, dense/rerank availability, default eval cut-offs. |
+| `GET` | `/v1/config` | Deployment capabilities: `read_only`, dense/rerank availability, default eval cut-offs, and the build identity (`version` plus a `revision`/`revision_source`). |
 | `GET` | `/v1/datasets` | List bundled and imported evaluation datasets with counts. |
 | `GET` | `/v1/datasets/{name}` | One dataset's manifest summary. |
 | `POST` | `/v1/datasets/ingest` | `{dataset, strategy?, max_tokens?, embed?, …}` → ingest a corpus into an index profile. |
@@ -475,13 +480,26 @@ reranker dependencies being unavailable (`dense_unavailable`,
 `vector_index_not_built`, `reranker_unavailable`). Body shape:
 `{"error": "<code>", "message": "<text>"}`.
 
-Reranking is optional and off by default. `rerank=true` retrieves
-`rerank_candidates` (default 20) candidates and reorders them, returning the top
-`top_k`; `rerank_candidates` must be `>= top_k` (else `422 invalid_candidates`).
-For a *matched* comparison a baseline and a reranked run must use the **same**
-candidate pool (equal `candidate_depth` / `rerank_candidates`); the runner
-rejects nothing here but reports candidate-pool metrics so a pool that is too
-shallow is visible rather than hidden.
+Reranking is optional and off by default. The evaluation runner keeps four
+quantities explicit and consistent: the **first-stage candidate depth**
+(`candidate_depth` — how deep the pool is retrieved, and the depth at which
+candidate recall is measured), the **reranker input** (`rerank_candidates`,
+default `candidate_depth` — how many pooled candidates are actually scored), the
+**final result count** (`top_k` — the cut ranking metrics use), and the
+candidate-recall depth (the first-stage pool, always measured on a rerank-free
+retrieval, so reranking can never change pool coverage). At request time
+`rerank=true` retrieves `rerank_candidates` candidates, reorders them and returns
+the top `top_k`; `rerank_candidates` must be `>= top_k` (else `422
+invalid_candidates`). The runner additionally requires `candidate_depth >= top_k`
+and `rerank_candidates <= candidate_depth` (else `422 invalid_evaluation_config`):
+a reranker can only score candidates that were actually retrieved. For a
+*matched* comparison set `rerank_candidates == candidate_depth`; when the
+reranker input is smaller, the pooled candidates beyond it are still counted in
+candidate recall rather than silently discarded. Because evaluation ranks
+*documents* and repeated chunks collapse to one document, the runner requests
+the whole reranked pool from the service and applies the `top_k` cut after
+de-duplication, so a short request cannot collapse to fewer than `top_k`
+documents.
 
 ---
 
@@ -765,7 +783,9 @@ To compare fairly, the baseline and the reranked run start from the **identical*
 20-chunk first-stage pool (this is the correction required by the phase spec: the
 baseline is the first-stage ranking of the *same* candidates, so a passage the
 reranker "finds" cannot have been absent from the pool). Both runs use BM25
-(`or`), `top_k=10`, chunk depth 20.
+(`or`), `top_k=10`, chunk depth 20, with `rerank_candidates == candidate_depth ==
+20`; candidate recall is measured on an independent rerank-free retrieval of the
+same pool, so it matches between the two rows by construction.
 
 | Configuration (pool of 20) | recall@10 | nDCG@10 | MRR@10 | candidate_recall@20 |
 |---|---|---|---|---|

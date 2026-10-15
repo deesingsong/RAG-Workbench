@@ -160,6 +160,10 @@ def test_config_endpoint_reports_capabilities(client: TestClient) -> None:
     assert body["autoseed_sample"] is False
     assert "bm25" in body["supported_modes"]
     assert body["default_candidate_depth"] >= 1
+    # The deployment revision is distinct from the package version and reports
+    # how it was resolved.
+    assert body["version"]
+    assert body["revision_source"] in {"git", "git-file", "source-hash", "unavailable"}
 
 
 @pytest.mark.parametrize(

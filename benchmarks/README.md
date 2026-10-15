@@ -26,10 +26,15 @@ file so a result cannot be misread:
   counted in `queries_excluded_no_qrels` but never retrieved; SciFact's
   `queries_retrieved` is 300, not 1109. Latency statistics cover only the queries
   that actually ran.
-- **Candidate recall is a first-stage property.** `candidate_recall@N` is measured
-  on the original candidate pool, before any reranking. Reranking reorders that
-  pool and is not allowed to change its membership, so candidate recall is
-  invariant under reranking.
+- **Candidate recall is a first-stage property.** The runner keeps four
+  quantities explicit: the first-stage candidate depth (`candidate_depth`, which
+  is also the candidate-recall depth), the reranker input (`rerank_candidates`,
+  defaulting to the pool depth), the final result count (`top_k`), and the pool
+  it measures. `candidate_recall@N` is measured on the rerank-free first-stage
+  retrieval at `candidate_depth`, so reranking — which only reorders that pool —
+  never changes it. When `rerank_candidates < candidate_depth` the reranker
+  scores only part of the pool, but the candidates beyond its input are still
+  counted in candidate recall rather than silently discarded.
 
 ## What was run
 

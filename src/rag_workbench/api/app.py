@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse
 
 from rag_workbench import __version__
 from rag_workbench.api.routes import documents, evaluation, health, search, vectors
-from rag_workbench.config import Settings, get_settings
+from rag_workbench.build import deployment_revision
+from rag_workbench.config import Settings, find_repo_root, get_settings
 from rag_workbench.domain.errors import (
     DatasetError,
     DenseUnavailableError,
@@ -89,6 +90,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.database = database
+    # Captured once, when this process builds the app. A hot reload that keeps
+    # the imported modules alive therefore keeps the *old* revision, which lets
+    # the Streamlit frontend detect that it is talking to a stale backend.
+    app.state.revision, app.state.revision_source = deployment_revision(find_repo_root())
     vector_indexer = VectorIndexer(database, settings)
     app.state.vector_indexer = vector_indexer
     app.state.ingestion_service = IngestionService(

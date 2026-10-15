@@ -39,6 +39,16 @@ def on_disk_version() -> str:
     probe = getattr(_backend, "on_disk_version", None)
     return probe() if probe is not None else "unknown"
 
+
+def on_disk_revision() -> tuple[str | None, str]:
+    """Resolve the source-tree deployment revision, tolerating a stale module."""
+
+    probe = getattr(_backend, "on_disk_revision", None)
+    if probe is None:
+        return None, "unavailable"
+    result = probe()
+    return result if isinstance(result, tuple) else (None, "unavailable")
+
 # Replaced at startup by resolve_api_url(). The default is the separately-run
 # local API; a single-process host starts the API in-process instead.
 API_URL = "http://127.0.0.1:8000"
@@ -740,8 +750,25 @@ def _render_deployment_diagnostics() -> None:
         )
         backend_version = cfg.get("version")
         disk_version = on_disk_version()
-        st.caption(f"backend version {backend_version} • source tree version {disk_version}")
-        if disk_version != "unknown" and backend_version and backend_version != disk_version:
+        backend_revision = cfg.get("revision")
+        backend_revision_source = cfg.get("revision_source")
+        disk_revision, disk_revision_source = on_disk_revision()
+        st.caption(
+            f"version {backend_version} • backend revision {backend_revision} "
+            f"({backend_revision_source}) • source-tree revision {disk_revision} "
+            f"({disk_revision_source})"
+        )
+        if (
+            disk_revision
+            and backend_revision
+            and disk_revision != backend_revision
+        ):
+            st.warning(
+                f"Backend revision mismatch: the API is serving {backend_revision} "
+                f"but the source tree is {disk_revision}. A full app restart/redeploy "
+                "may be required to load the current backend code."
+            )
+        elif disk_version != "unknown" and backend_version and backend_version != disk_version:
             st.warning(
                 f"Version mismatch: the API reports {backend_version} but the source "
                 f"tree is {disk_version}. A full app restart may be required to load "

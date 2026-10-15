@@ -7,7 +7,7 @@ in the service so the CLI and Streamlit produce identical results.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import ValidationError as PydanticValidationError
 
@@ -178,6 +178,7 @@ def export_experiment(
 
 @router.get("/config", tags=["system"])
 def app_config(
+    request: Request,
     settings: Settings = Depends(get_settings),
     service: EvaluationService = Depends(get_evaluation_service),
 ) -> dict:
@@ -187,6 +188,11 @@ def app_config(
         "autoseed_sample": settings.autoseed_sample,
         "app_name": settings.app_name,
         "version": __import__("rag_workbench").__version__,
+        # The revision this process built at startup, distinct from the package
+        # version; a stale (hot-reloaded) backend reports an older revision than
+        # the source tree on disk and the UI warns.
+        "revision": getattr(request.app.state, "revision", None),
+        "revision_source": getattr(request.app.state, "revision_source", "unavailable"),
         "dense_available": available,
         "reranking_available": available,
         "supported_modes": ["bm25", "dense", "hybrid"],

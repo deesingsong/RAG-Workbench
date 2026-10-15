@@ -16,11 +16,26 @@ Two relevance-mapping policies are supported, recorded on every experiment:
   units it actually contains, so a chunk is never assumed relevant merely because
   it came from a relevant contract.
 
-Candidate depth is tracked separately from the final top-K: ranking metrics are
-computed on the de-duplicated ranking truncated to K, while candidate recall is
-computed over the whole *first-stage* pooled ranking at depth N. Reranking is a
-pure ranking operation: it reorders the identical candidate pool, so candidate
-recall is always measured on the pre-rerank pool and never on the reranked list.
+Four quantities are kept distinct and consistent with the search service:
+
+* the *first-stage candidate depth* (``candidate_depth``) — how deep the pool is
+  retrieved, and the depth at which candidate recall is measured;
+* the *reranker input* (``rerank_candidates``) — how many of the pooled
+  candidates the reranker actually scores; it may be smaller than the pool but
+  never larger, and the pooled candidates it does not score are still counted in
+  candidate recall, never silently discarded;
+* the *final result count* (``top_k``) — the ranking cut that ranking metrics
+  use; and
+* the *candidate-recall depth* — the first-stage pool, always measured on a
+  rerank-free retrieval so reranking can never change pool coverage.
+
+Ranking metrics are computed on the de-duplicated ranking truncated to K.
+Because evaluation ranks *documents* and repeated chunks collapse to one
+document, the runner requests the whole reranked pool from the service rather
+than only ``top_k`` hits — a shortened request could collapse to fewer than
+``top_k`` documents — and applies the k cut after de-duplication. Reranking is a
+pure ranking operation over the identical candidate pool, so candidate recall is
+always measured on the pre-rerank pool.
 
 Queries without any relevance judgment cannot contribute a metric, so by default
 they are **skipped before retrieval** (``skip_unjudged``), which avoids wasting
@@ -56,7 +71,7 @@ from rag_workbench.evaluation.metrics import (
 from rag_workbench.evaluation.runtime import git_commit, latency_stats, runtime_environment
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.models import Document, IndexProfile
-from rag_workbench.retrieval.service import SearchService
+from rag_workbench.retrieval.service import MAX_TOP_K, SearchService
 
 TIMING_KEYS = ("lexical", "embed_query", "vector_search", "resolve", "fusion")
 
@@ -99,12 +114,27 @@ class EvalRunConfig(BaseModel):
             raise ValueError("top_k must cover every requested k value")
         if self.candidate_depth < self.top_k:
             raise ValueError("candidate_depth must be >= top_k")
-        if (
-            self.rerank
-            and self.rerank_candidates is not None
-            and self.rerank_candidates < self.top_k
-        ):
-            raise ValueError("rerank_candidates must be >= top_k")
+        if self.candidate_depth > MAX_TOP_K:
+            raise ValueError(
+                f"candidate_depth must be <= {MAX_TOP_K} "
+                "(the search service's maximum retrievable depth)"
+            )
+        if self.rerank:
+            pool = (
+                self.rerank_candidates
+                if self.rerank_candidates is not None
+                else self.candidate_depth
+            )
+            if pool < self.top_k:
+                raise ValueError(
+                    f"rerank_candidates ({pool}) must be >= top_k ({self.top_k})"
+                )
+            if pool > self.candidate_depth:
+                raise ValueError(
+                    f"rerank_candidates ({pool}) must be <= candidate_depth "
+                    f"({self.candidate_depth}): the reranker can only score candidates "
+                    "that were actually retrieved"
+                )
         return self
 
 
@@ -273,6 +303,13 @@ class EvaluationRunner:
             notes.append(f"{excluded} query(ies) had no relevance judgments and were excluded")
 
         latency = self._latency(outcomes, config)
+        if config.rerank:
+            notes.append(
+                "reranked latency covers the served configuration (retrieve "
+                "rerank_candidates + rerank); candidate recall additionally retrieves "
+                "the first-stage pool at candidate_depth, which is evaluation "
+                "bookkeeping and not part of the served retrieval path"
+            )
 
         return ExperimentResult(
             created_at=None,
@@ -349,48 +386,63 @@ class EvaluationRunner:
         collection: str,
         config: EvalRunConfig,
     ) -> QueryOutcome:
-        rerank_pool: int | None = None
-        if config.rerank:
-            rerank_pool = config.rerank_candidates or config.candidate_depth
-        # The first-stage pool must never be truncated by the reranker: retrieve
-        # the whole pool so the pre-rerank ranking can be reconstructed exactly.
-        retrieval_top_k = max(config.candidate_depth, rerank_pool or 0)
-        response = self._search.search(
+        # The first-stage candidate pool is retrieved once, without reranking.
+        # It is the depth at which candidate recall is measured, and reranking
+        # reorders it but never adds or removes members, so measuring on a
+        # rerank-free retrieval keeps candidate recall invariant under reranking.
+        pool_response = self._search.search(
             query=query_text,
             profile_id=config.profile_id,
             mode=config.mode,
-            top_k=retrieval_top_k,
+            top_k=config.candidate_depth,
             collection=collection,
-            candidates=config.candidates or retrieval_top_k,
-            rerank=config.rerank,
-            reranker_model=config.reranker_model,
-            rerank_candidates=rerank_pool,
+            candidates=config.candidates or config.candidate_depth,
+            rerank=False,
             query_mode=config.query_mode,
         )
+        pool_hits = list(pool_response.hits)
 
-        final_hits = list(response.hits)
         if config.rerank:
-            # Reconstruct the *pre-rerank* ordering from the preserved original
-            # retrieval rank. This is the first-stage candidate pool: reranking
-            # reorders it but cannot add or remove members, so candidate recall
-            # is measured here, not on the reranked list.
-            pool_hits = sorted(
-                final_hits, key=lambda hit: (hit.retrieval_rank or hit.rank, hit.chunk_id)
+            # The reranker scores ``rerank_candidates`` of the pooled candidates
+            # and the service returns the whole reranked pool. Evaluation ranks
+            # *documents*, and repeated chunks collapse to one document, so the
+            # pool must be requested in full: asking the service for only
+            # ``top_k`` hits could collapse to fewer than ``top_k`` documents.
+            # The metric cut is applied after de-duplication. The deeper,
+            # rerank-free pool above is still retained for candidate recall, so
+            # candidates the reranker does not score are counted, not discarded.
+            rerank_pool = config.rerank_candidates or config.candidate_depth
+            final_response = self._search.search(
+                query=query_text,
+                profile_id=config.profile_id,
+                mode=config.mode,
+                top_k=rerank_pool,
+                collection=collection,
+                candidates=config.candidates or rerank_pool,
+                rerank=True,
+                reranker_model=config.reranker_model,
+                rerank_candidates=rerank_pool,
+                query_mode=config.query_mode,
             )
+            final_hits = list(final_response.hits)
         else:
-            pool_hits = final_hits
+            final_response = pool_response
+            final_hits = pool_hits
 
-        final_trace, final_keys = self._map_ranking(
-            final_hits, mapping, external_by_document, evidence_by_contract, relevance
-        )
-        dropped = len(final_hits) - sum(item.member_count for item in final_trace)
-        _, pool_keys = self._map_ranking(
+        pool_trace, pool_keys = self._map_ranking(
             pool_hits, mapping, external_by_document, evidence_by_contract, relevance
         )
+        if config.rerank:
+            final_trace, final_keys = self._map_ranking(
+                final_hits, mapping, external_by_document, evidence_by_contract, relevance
+            )
+        else:
+            final_trace, final_keys = pool_trace, pool_keys
+        dropped = len(pool_hits) - sum(item.member_count for item in pool_trace)
 
         relevant = relevant_keys(relevance)
         sufficient = len(pool_keys) >= config.top_k
-        timing = self._timings(response)
+        timing = self._timings(final_response)
 
         if not relevant:
             return QueryOutcome(
@@ -398,7 +450,7 @@ class EvaluationRunner:
                 query=query_text,
                 num_relevant=0,
                 status="excluded_no_qrels",
-                candidate_count=len(final_hits),
+                candidate_count=len(pool_hits),
                 unique_documents=len(final_keys),
                 sufficient_candidates=sufficient,
                 metrics=None,
@@ -439,7 +491,7 @@ class EvaluationRunner:
                     code=diag.BELOW_TOP_K_CUTOFF,
                     detail=(
                         f"only {len(pool_keys)} unique units retrieved from a "
-                        f"{retrieval_top_k}-candidate pool; top-{config.top_k} "
+                        f"{config.candidate_depth}-candidate pool; top-{config.top_k} "
                         "may be incomplete"
                     ),
                 )
@@ -449,7 +501,7 @@ class EvaluationRunner:
             query=query_text,
             num_relevant=len(relevant),
             status="ok",
-            candidate_count=len(final_hits),
+            candidate_count=len(pool_hits),
             unique_documents=len(final_keys),
             sufficient_candidates=sufficient,
             metrics=metrics,

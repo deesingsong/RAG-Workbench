@@ -13,6 +13,7 @@ always wins, so local development is unchanged.
 
 from __future__ import annotations
 
+import importlib
 import os
 import socket
 import sys
@@ -143,6 +144,25 @@ def on_disk_version() -> str:
     except OSError:  # pragma: no cover - unusual install layout
         return "unknown"
     return "unknown"
+
+
+def on_disk_revision() -> tuple[str | None, str]:
+    """Resolve the deployment revision from the source tree *on disk*.
+
+    Unlike :func:`on_disk_version` (a release string that rarely changes), the
+    revision identifies the exact code on disk and is resolved fresh on every
+    call — never from the possibly stale imported module — so the UI can compare
+    it against the revision the running API built at startup.
+    """
+
+    try:
+        module = importlib.import_module("rag_workbench.build")
+        resolver = getattr(module, "deployment_revision", None)
+        if resolver is None:
+            return None, "unavailable"
+        return resolver(_REPO_ROOT)
+    except Exception:  # pragma: no cover - old module without a revision helper
+        return None, "unavailable"
 
 
 def seed_sample_if_empty(api_url: str) -> str | None:
