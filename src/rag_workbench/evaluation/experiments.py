@@ -28,7 +28,12 @@ from rag_workbench.evaluation.runner import ExperimentResult, QueryOutcome
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.models import Experiment, ExperimentQuery
 
-EXPERIMENT_SCHEMA_VERSION = "1"
+#: Bumped when the experiment record's semantics change: v1 measured latency
+#: over every query (including unjudged ones retrieved but excluded from every
+#: aggregate); v2 skips unjudged queries before retrieval, reports
+#: ``queries_retrieved``, measures candidate recall on the first-stage pool, and
+#: records ``skip_unjudged`` in the run config.
+EXPERIMENT_SCHEMA_VERSION = "2"
 
 RECORDED_SOURCE = "recorded"
 LIVE_SOURCE = "live"

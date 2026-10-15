@@ -184,6 +184,7 @@ def app_config(
     available = dense_feature_available()
     return {
         "read_only": settings.read_only,
+        "autoseed_sample": settings.autoseed_sample,
         "app_name": settings.app_name,
         "version": __import__("rag_workbench").__version__,
         "dense_available": available,

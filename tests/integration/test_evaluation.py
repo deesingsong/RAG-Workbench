@@ -112,6 +112,84 @@ def test_document_level_evaluation_end_to_end(
     assert trace[0].relevant is True
 
 
+class _CountingSearch:
+    """Wrap a real search service and record the queries it was asked to run."""
+
+    def __init__(self, inner: SearchService) -> None:
+        self._inner = inner
+        self.queries: list[str] = []
+
+    def search(self, **kwargs):  # noqa: ANN003, ANN201 - transparent passthrough
+        self.queries.append(kwargs["query"])
+        return self._inner.search(**kwargs)
+
+
+def test_unjudged_queries_are_skipped_before_retrieval(
+    settings: Settings, database: Database, tmp_path: Path
+) -> None:
+    queries = [
+        EvalQuery(id="Q1", text="system"),
+        EvalQuery(id="QX", text="a query with no judgments at all"),
+    ]
+    qrels = {"Q1": {"D1": 1}}
+    manifest = build_manifest(
+        name="eval-skip",
+        source="synthetic",
+        license="CC0",
+        documents=_DOCS,
+        queries=queries,
+        qrels=qrels,
+    )
+    directory = tmp_path / "datasets" / "eval-skip"
+    write_dataset(
+        directory,
+        EvaluationDataset(
+            manifest=manifest, documents=_DOCS, queries=queries, qrels=qrels
+        ),
+    )
+    dataset = EvaluationDataset(
+        manifest=manifest,
+        documents=_DOCS,
+        queries=queries,
+        qrels=qrels,
+        directory=directory,
+    )
+
+    ingestion = IngestionService(database, settings)
+    profile = IndexProfileSpec(name="paragraph-220", chunker=ChunkerConfig())
+    import_corpus(ingestion, dataset, collection="eval-skip", profile=profile)
+
+    counting = _CountingSearch(SearchService(database, settings))
+    runner = EvaluationRunner(database, settings, counting)
+    result = runner.run(
+        dataset,
+        EvalRunConfig(
+            dataset="eval-skip",
+            profile_id=profile.key,
+            collection="eval-skip",
+            top_k=3,
+            k_values=(1, 3),
+        ),
+    )
+
+    # The unjudged query was never retrieved; only the judged one was.
+    assert counting.queries == ["system"]
+    assert result.counts["queries_retrieved"] == 1
+    assert result.counts["queries_excluded_no_qrels"] == 1
+    # An excluded query must not be counted as an insufficient-candidate run.
+    assert result.counts["queries_insufficient_candidates"] == 0
+    # Latency covers only the query that actually ran.
+    assert result.latency["queries"] == 1
+    assert result.latency["retrieval_ms"]["count"] == 1
+    assert result.latency["total_ms"]["count"] == 1
+
+    excluded = next(outcome for outcome in result.per_query if outcome.query_id == "QX")
+    assert excluded.metrics is None
+    assert excluded.timings_ms == {}
+    assert excluded.trace == []
+    assert result.notes and "skipped before retrieval" in result.notes[0]
+
+
 def test_experiment_persistence_and_export_round_trip(
     settings: Settings, database: Database, tmp_path: Path
 ) -> None:

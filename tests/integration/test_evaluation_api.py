@@ -157,6 +157,7 @@ def test_config_endpoint_reports_capabilities(client: TestClient) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["read_only"] is False
+    assert body["autoseed_sample"] is False
     assert "bm25" in body["supported_modes"]
     assert body["default_candidate_depth"] >= 1
 

@@ -125,6 +125,26 @@ def server_is_read_only(api_url: str) -> bool:
     return False
 
 
+def on_disk_version() -> str:
+    """Parse the package version from the source tree *on disk*.
+
+    Importing :mod:`rag_workbench` would return whatever is already in
+    ``sys.modules`` — the same module the (possibly stale) in-process API holds
+    after a hot reload. Reading the file directly means the UI can compare the
+    code it would run against the version the running API reports and warn when
+    they disagree. Returns ``"unknown"`` when the file cannot be read.
+    """
+
+    path = _REPO_ROOT / "src" / "rag_workbench" / "__init__.py"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("__version__"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    except OSError:  # pragma: no cover - unusual install layout
+        return "unknown"
+    return "unknown"
+
+
 def seed_sample_if_empty(api_url: str) -> str | None:
     """Seed the bundled sample contract under each demonstration profile.
 

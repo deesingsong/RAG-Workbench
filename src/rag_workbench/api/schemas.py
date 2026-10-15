@@ -190,6 +190,7 @@ class ExperimentListResponse(BaseModel):
 
 class AppConfigResponse(BaseModel):
     read_only: bool
+    autoseed_sample: bool = False
     app_name: str
     version: str
     dense_available: bool

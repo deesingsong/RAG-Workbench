@@ -32,6 +32,13 @@ def server_is_read_only(api_url: str) -> bool:
     probe = getattr(_backend, "server_is_read_only", None)
     return bool(probe(api_url)) if probe is not None else False
 
+
+def on_disk_version() -> str:
+    """Read the package version from the source tree, tolerating a stale module."""
+
+    probe = getattr(_backend, "on_disk_version", None)
+    return probe() if probe is not None else "unknown"
+
 # Replaced at startup by resolve_api_url(). The default is the separately-run
 # local API; a single-process host starts the API in-process instead.
 API_URL = "http://127.0.0.1:8000"
@@ -98,45 +105,51 @@ def render_status() -> None:
 
 def render_corpus() -> None:
     st.header("Corpus manager")
-    with st.form("upload", clear_on_submit=True):
-        uploaded = st.file_uploader("Upload a TXT, MD or text PDF", type=["txt", "md", "markdown", "pdf"])
-        collection = st.text_input("Collection", value="default")
-        strategy = st.selectbox(
-            "Chunking strategy",
-            ["paragraph", "fixed_token", "clause_aware"],
-            help="clause_aware preserves legal clause boundaries and section hierarchy",
+    if READ_ONLY:
+        st.info(
+            "Read-only demo: document ingestion and index rebuilds are disabled. "
+            "The bundled sample corpus is seeded by the backend itself at startup."
         )
-        max_tokens = st.number_input("Max tokens", min_value=16, max_value=2048, value=220)
-        overlap = st.number_input("Overlap tokens", min_value=0, max_value=1024, value=40)
-        embed = st.checkbox("Build a dense profile (Sentence Transformers embeddings)")
-        embedding_model = st.text_input(
-            "Embedding model (optional)", value="", disabled=not embed
-        )
-        submitted = st.form_submit_button("Ingest")
+    else:
+        with st.form("upload", clear_on_submit=True):
+            uploaded = st.file_uploader("Upload a TXT, MD or text PDF", type=["txt", "md", "markdown", "pdf"])
+            collection = st.text_input("Collection", value="default")
+            strategy = st.selectbox(
+                "Chunking strategy",
+                ["paragraph", "fixed_token", "clause_aware"],
+                help="clause_aware preserves legal clause boundaries and section hierarchy",
+            )
+            max_tokens = st.number_input("Max tokens", min_value=16, max_value=2048, value=220)
+            overlap = st.number_input("Overlap tokens", min_value=0, max_value=1024, value=40)
+            embed = st.checkbox("Build a dense profile (Sentence Transformers embeddings)")
+            embedding_model = st.text_input(
+                "Embedding model (optional)", value="", disabled=not embed
+            )
+            submitted = st.form_submit_button("Ingest")
 
-    if submitted and uploaded is not None:
-        files = {"file": (uploaded.name, uploaded.getvalue())}
-        form = {
-            "collection": collection,
-            "strategy": strategy,
-            "max_tokens": str(int(max_tokens)),
-            "overlap_tokens": str(int(overlap)),
-            "embed": "true" if embed else "false",
-        }
-        if embed and embedding_model.strip():
-            form["embedding_model"] = embedding_model.strip()
-        status, body = api_post("/v1/documents", files=files, data=form)
-        if status == 201:
-            assert isinstance(body, dict)
-            if body.get("is_duplicate"):
-                kind = "duplicate"
+        if submitted and uploaded is not None:
+            files = {"file": (uploaded.name, uploaded.getvalue())}
+            form = {
+                "collection": collection,
+                "strategy": strategy,
+                "max_tokens": str(int(max_tokens)),
+                "overlap_tokens": str(int(overlap)),
+                "embed": "true" if embed else "false",
+            }
+            if embed and embedding_model.strip():
+                form["embedding_model"] = embedding_model.strip()
+            status, body = api_post("/v1/documents", files=files, data=form)
+            if status == 201:
+                assert isinstance(body, dict)
+                if body.get("is_duplicate"):
+                    kind = "duplicate"
+                else:
+                    kind = "ingested" if body.get("state") == "completed" else body.get("state")
+                st.success(f"{kind}: {body.get('source_name')} → {body.get('chunk_count')} chunks")
+                for note in body.get("diagnostics", []):
+                    st.info(note)
             else:
-                kind = "ingested" if body.get("state") == "completed" else body.get("state")
-            st.success(f"{kind}: {body.get('source_name')} → {body.get('chunk_count')} chunks")
-            for note in body.get("diagnostics", []):
-                st.info(note)
-        else:
-            st.error(f"Ingestion failed ({status}): {body}")
+                st.error(f"Ingestion failed ({status}): {body}")
 
     status, body = api_get("/v1/documents", limit=100)
     if status == 200 and isinstance(body, dict):
@@ -174,14 +187,18 @@ def render_vector_status() -> None:
             f"chunks={entry.get('chunk_count')} points={entry.get('point_count')} "
             f"missing={entry.get('missing_points')} orphans={entry.get('orphan_points')}"
         )
-    if any(not entry.get("in_sync") for entry in statuses) and st.button(
-        "Rebuild dense indexes now"
-    ):
-        status, body = api_post("/v1/vectors/rebuild", json={"all_profiles": True})
-        if status == 200:
-            st.success(f"Rebuilt: {body}")
-        else:
-            st.error(f"Rebuild failed ({status}): {body}")
+    if any(not entry.get("in_sync") for entry in statuses):
+        if READ_ONLY:
+            st.warning(
+                "One or more dense indexes are out of sync; rebuilds are disabled "
+                "in read-only mode."
+            )
+        elif st.button("Rebuild dense indexes now"):
+            status, body = api_post("/v1/vectors/rebuild", json={"all_profiles": True})
+            if status == 200:
+                st.success(f"Rebuilt: {body}")
+            else:
+                st.error(f"Rebuild failed ({status}): {body}")
 
 
 def _render_hits(body: dict) -> None:
@@ -604,6 +621,12 @@ def _render_dataset_browser() -> None:
 
 def _render_run_form() -> None:
     st.subheader("Run an evaluation")
+    if READ_ONLY:
+        st.info(
+            "Read-only demo: running new evaluations is disabled. The committed "
+            "recorded experiments are shown below."
+        )
+        return
     datasets = _fetch_datasets()
     profiles = _profile_options()
     if not datasets:
@@ -636,9 +659,6 @@ def _render_run_form() -> None:
     label = st.text_input("Label (optional)", value="", key="eval-label")
     subset = st.checkbox("Quick subset (limit queries)", value=False, key="eval-subset")
 
-    if READ_ONLY:
-        st.info("This deployment is read-only; running new evaluations is disabled.")
-        return
     if not st.button("Run evaluation", key="eval-run"):
         return
 
@@ -710,7 +730,7 @@ def _render_deployment_diagnostics() -> None:
     with st.expander("Deployment diagnostics (read-only)"):
         st.caption(
             f"repo_root {cfg.get('repo_root')} • read_only {cfg.get('read_only')} • "
-            f"dense_available {cfg.get('dense_available')}"
+            f"autoseed {cfg.get('autoseed_sample')} • dense_available {cfg.get('dense_available')}"
         )
         st.caption(
             f"datasets {cfg.get('bundled_datasets_dir')} "
@@ -718,6 +738,15 @@ def _render_deployment_diagnostics() -> None:
             f"recorded {cfg.get('recorded_experiments_dir')} "
             f"(exists={cfg.get('recorded_experiments_exists')})"
         )
+        backend_version = cfg.get("version")
+        disk_version = on_disk_version()
+        st.caption(f"backend version {backend_version} • source tree version {disk_version}")
+        if disk_version != "unknown" and backend_version and backend_version != disk_version:
+            st.warning(
+                f"Version mismatch: the API reports {backend_version} but the source "
+                f"tree is {disk_version}. A full app restart may be required to load "
+                "the current backend."
+            )
 
 
 def render_evaluation_lab() -> None:
@@ -796,9 +825,14 @@ def render_failure_explorer() -> None:
         return
 
     per_query = record.get("per_query", [])
+    # Only *evaluated* queries can carry a failure signal: a query with no
+    # relevance judgments has no metric and is excluded from every aggregate, so
+    # it must not inflate the diagnosis counts or the denominator.
+    evaluated = [q for q in per_query if q.get("status") == "ok" and q.get("metrics")]
+    unevaluated = len(per_query) - len(evaluated)
     counts: dict[str, int] = {}
     failing = []
-    for query in per_query:
+    for query in evaluated:
         codes = [d["code"] for d in query.get("diagnostics", [])]
         real_codes = [c for c in codes if c != "unresolved"]
         if real_codes:
@@ -806,16 +840,19 @@ def render_failure_explorer() -> None:
         for code in codes:
             counts[code] = counts.get(code, 0) + 1
 
-    st.markdown("**Diagnosis frequency** (queries per code)")
+    st.markdown("**Diagnosis frequency** (evaluated queries per code)")
     if counts:
         st.bar_chart(counts)
     else:
-        st.caption("No diagnostics recorded for this experiment.")
+        st.caption("No diagnostics recorded for the evaluated queries of this experiment.")
 
-    st.caption(
-        f"{len(failing)} of {len(per_query)} queries carry an observable failure "
-        f"signal."
+    denominator = (
+        f"{len(failing)} of {len(evaluated)} evaluated queries carry an observable "
+        "failure signal"
     )
+    if unevaluated:
+        denominator += f"; {unevaluated} unjudged query(ies) were not evaluated"
+    st.caption(denominator + ".")
     code_filter = st.multiselect(
         "Filter by diagnosis", sorted({c for _, codes in failing for c in codes}),
         key="failure-filter",

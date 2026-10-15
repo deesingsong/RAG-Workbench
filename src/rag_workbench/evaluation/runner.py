@@ -18,7 +18,14 @@ Two relevance-mapping policies are supported, recorded on every experiment:
 
 Candidate depth is tracked separately from the final top-K: ranking metrics are
 computed on the de-duplicated ranking truncated to K, while candidate recall is
-computed over the whole pooled ranking at depth N.
+computed over the whole *first-stage* pooled ranking at depth N. Reranking is a
+pure ranking operation: it reorders the identical candidate pool, so candidate
+recall is always measured on the pre-rerank pool and never on the reranked list.
+
+Queries without any relevance judgment cannot contribute a metric, so by default
+they are **skipped before retrieval** (``skip_unjudged``), which avoids wasting
+retrieval — and, especially, cross-encoder inference — on queries that are then
+excluded from every aggregate and from latency.
 """
 
 from __future__ import annotations
@@ -79,6 +86,10 @@ class EvalRunConfig(BaseModel):
     label: str | None = None
     subset: bool = False
     related_baseline: str | None = None
+    #: Skip retrieval entirely for queries with no relevance judgments. Such a
+    #: query can never produce a metric, so retrieving it only wastes work; the
+    #: explicit policy keeps evaluation cost proportional to the judged set.
+    skip_unjudged: bool = True
 
     @model_validator(mode="after")
     def _validate(self) -> EvalRunConfig:
@@ -216,14 +227,22 @@ class EvaluationRunner:
                 "(not directly comparable to full-corpus results)"
             )
 
-        rerank_pool = config.rerank_candidates if config.rerank else None
         outcomes: list[QueryOutcome] = []
+        skipped_unjudged = 0
         for query in queries:
+            relevance = dataset.relevance_for(query.id)
+            if config.skip_unjudged and not relevance:
+                # Retrieval is skipped: an unjudged query has no metric, and (for
+                # a reranked configuration) skipping it avoids pointless model
+                # inference. It is reported, never silently dropped.
+                outcomes.append(self._excluded_outcome(query.id, query.text))
+                skipped_unjudged += 1
+                continue
             outcomes.append(
                 self._evaluate_query(
                     query_id=query.id,
                     query_text=query.text,
-                    relevance=dataset.relevance_for(query.id),
+                    relevance=relevance,
                     mapping=mapping,
                     external_by_document=external_by_document,
                     evidence_by_contract=evidence_by_contract,
@@ -231,7 +250,6 @@ class EvaluationRunner:
                     judged_domain=judged_domain,
                     collection=collection,
                     config=config,
-                    rerank_pool=rerank_pool,
                 )
             )
 
@@ -240,8 +258,18 @@ class EvaluationRunner:
         candidate_metrics = self._candidate_aggregate(outcomes, config.k_values)
 
         excluded = sum(1 for outcome in outcomes if outcome.status == "excluded_no_qrels")
-        insufficient = sum(1 for outcome in outcomes if not outcome.sufficient_candidates)
-        if excluded:
+        retrieved = sum(1 for outcome in outcomes if outcome.timings_ms)
+        insufficient = sum(
+            1
+            for outcome in outcomes
+            if outcome.metrics is not None and not outcome.sufficient_candidates
+        )
+        if skipped_unjudged:
+            notes.append(
+                f"{skipped_unjudged} unjudged query(ies) were skipped before retrieval "
+                "(skip_unjudged policy) and excluded from metrics and latency"
+            )
+        elif excluded:
             notes.append(f"{excluded} query(ies) had no relevance judgments and were excluded")
 
         latency = self._latency(outcomes, config)
@@ -262,6 +290,7 @@ class EvaluationRunner:
             counts={
                 "queries_total": len(dataset.queries),
                 "queries_run": len(outcomes),
+                "queries_retrieved": retrieved,
                 "queries_evaluated": len(evaluated),
                 "queries_excluded_no_qrels": excluded,
                 "queries_insufficient_candidates": insufficient,
@@ -271,6 +300,37 @@ class EvaluationRunner:
             latency=latency,
             per_query=outcomes,
             notes=notes,
+        )
+
+    @staticmethod
+    def _excluded_outcome(query_id: str, query_text: str) -> QueryOutcome:
+        """A recorded, non-evaluated query that was never retrieved.
+
+        ``num_relevant == 0`` and ``status == "excluded_no_qrels"`` mark it as
+        excluded from every aggregate; ``timings_ms`` stays empty so latency
+        statistics are computed only over queries that actually ran.
+        """
+
+        return QueryOutcome(
+            query_id=query_id,
+            query=query_text,
+            num_relevant=0,
+            status="excluded_no_qrels",
+            candidate_count=0,
+            unique_documents=0,
+            sufficient_candidates=False,
+            metrics=None,
+            timings_ms={},
+            diagnostics=[
+                diag.Diagnostic(
+                    code=diag.UNRESOLVED,
+                    detail=(
+                        "no relevance judgments for this query; retrieval skipped "
+                        "(skip_unjudged policy) and excluded from metrics and latency"
+                    ),
+                )
+            ],
+            trace=[],
         )
 
     # ----------------------------------------------------------------- queries
@@ -288,15 +348,20 @@ class EvaluationRunner:
         judged_domain: set[str],
         collection: str,
         config: EvalRunConfig,
-        rerank_pool: int | None,
     ) -> QueryOutcome:
+        rerank_pool: int | None = None
+        if config.rerank:
+            rerank_pool = config.rerank_candidates or config.candidate_depth
+        # The first-stage pool must never be truncated by the reranker: retrieve
+        # the whole pool so the pre-rerank ranking can be reconstructed exactly.
+        retrieval_top_k = max(config.candidate_depth, rerank_pool or 0)
         response = self._search.search(
             query=query_text,
             profile_id=config.profile_id,
             mode=config.mode,
-            top_k=config.candidate_depth,
+            top_k=retrieval_top_k,
             collection=collection,
-            candidates=config.candidates or config.candidate_depth,
+            candidates=config.candidates or retrieval_top_k,
             rerank=config.rerank,
             reranker_model=config.reranker_model,
             rerank_candidates=rerank_pool,
@@ -305,23 +370,26 @@ class EvaluationRunner:
 
         final_hits = list(response.hits)
         if config.rerank:
-            baseline_hits = sorted(
+            # Reconstruct the *pre-rerank* ordering from the preserved original
+            # retrieval rank. This is the first-stage candidate pool: reranking
+            # reorders it but cannot add or remove members, so candidate recall
+            # is measured here, not on the reranked list.
+            pool_hits = sorted(
                 final_hits, key=lambda hit: (hit.retrieval_rank or hit.rank, hit.chunk_id)
             )
         else:
-            baseline_hits = final_hits
+            pool_hits = final_hits
 
-        dropped = 0
         final_trace, final_keys = self._map_ranking(
             final_hits, mapping, external_by_document, evidence_by_contract, relevance
         )
         dropped = len(final_hits) - sum(item.member_count for item in final_trace)
-        _, baseline_keys = self._map_ranking(
-            baseline_hits, mapping, external_by_document, evidence_by_contract, relevance
+        _, pool_keys = self._map_ranking(
+            pool_hits, mapping, external_by_document, evidence_by_contract, relevance
         )
 
         relevant = relevant_keys(relevance)
-        sufficient = len(final_keys) >= config.top_k
+        sufficient = len(pool_keys) >= config.top_k
         timing = self._timings(response)
 
         if not relevant:
@@ -338,22 +406,27 @@ class EvaluationRunner:
                 diagnostics=[
                     diag.Diagnostic(
                         code=diag.UNRESOLVED,
-                        detail="no relevance judgments for this query; excluded from aggregates",
+                        detail=(
+                            "no relevance judgments for this query; retrieved but "
+                            "excluded from aggregates and latency"
+                        ),
                     )
                 ],
                 trace=final_trace,
             )
 
         metrics = query_metrics(final_keys, relevance, k_values=config.k_values)
+        # Candidate recall is a property of the first-stage pool; reranking only
+        # changes the order in which those candidates are presented.
         candidate_recall = {
-            f"candidate_recall@{n}": candidate_recall_at_n(final_keys, relevant, n)
+            f"candidate_recall@{n}": candidate_recall_at_n(pool_keys, relevant, n)
             for n in (10, 20, 50, 100)
         }
         diagnostics = diag.diagnose_query(
             relevant=relevant,
-            candidate_keys=final_keys,
+            candidate_keys=pool_keys,
             final_keys=final_keys,
-            baseline_keys=baseline_keys,
+            baseline_keys=pool_keys,
             indexed_domain=indexed_domain,
             judged_domain=judged_domain,
             top_k=config.top_k,
@@ -365,8 +438,8 @@ class EvaluationRunner:
                 diag.Diagnostic(
                     code=diag.BELOW_TOP_K_CUTOFF,
                     detail=(
-                        f"only {len(final_keys)} unique units retrieved from a "
-                        f"{config.candidate_depth}-candidate pool; top-{config.top_k} "
+                        f"only {len(pool_keys)} unique units retrieved from a "
+                        f"{retrieval_top_k}-candidate pool; top-{config.top_k} "
                         "may be incomplete"
                     ),
                 )
@@ -526,9 +599,22 @@ class EvaluationRunner:
     def _latency(
         self, outcomes: Sequence[QueryOutcome], config: EvalRunConfig
     ) -> dict[str, object]:
-        retrieval = [outcome.timings_ms.get("retrieval", 0.0) for outcome in outcomes]
-        total = [outcome.timings_ms.get("total", 0.0) for outcome in outcomes]
+        # Only queries that were actually retrieved contribute latency. Queries
+        # skipped before retrieval (unjudged, under the default policy) carry no
+        # timings and are deliberately absent from every statistic.
+        retrieved = [outcome for outcome in outcomes if outcome.timings_ms]
+        retrieval = [
+            outcome.timings_ms["retrieval"]
+            for outcome in retrieved
+            if "retrieval" in outcome.timings_ms
+        ]
+        total = [
+            outcome.timings_ms["total"]
+            for outcome in retrieved
+            if "total" in outcome.timings_ms
+        ]
         latency: dict[str, object] = {
+            "queries": len(retrieved),
             "retrieval_ms": latency_stats(retrieval),
             "total_ms": latency_stats(total),
         }
