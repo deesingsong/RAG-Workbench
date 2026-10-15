@@ -198,14 +198,15 @@ To deploy:
    `ui/streamlit_app.py`**.
 3. Set the Python version to **3.12**. Dependencies come from
    `uv.lock` / `pyproject.toml` (Community Cloud supports uv). The optional
-   `dense` extra is **not** installed and the auto-seeded profile is
-   lexical-only, so the live demo runs on BM25: selecting `dense`/`hybrid`
-   returns a clear `422 profile_not_dense` (a degenerate dense profile would
-   instead return `503 dense_unavailable`), and the Reranking Laboratory returns
-   a clear `503 reranker_unavailable`.
+   `dense` extra is **not** installed and the auto-seeded profiles
+   (`paragraph` and `clause_aware`) are lexical-only, so the live demo runs on
+   BM25: selecting `dense`/`hybrid` returns a clear `422 profile_not_dense` (a
+   degenerate dense profile would instead return `503 dense_unavailable`), and
+   the Reranking Laboratory returns a clear `503 reranker_unavailable`.
 
 Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
-store reset when the app sleeps or reboots (hence the auto-seed) — and the
+store reset when the app sleeps or reboots (hence the auto-seed, which also
+fills in a missing demonstration profile after a code upgrade) — and the
 deep-learning dense stack is heavy for the free tier, so BM25-only is the
 default live demo.
 

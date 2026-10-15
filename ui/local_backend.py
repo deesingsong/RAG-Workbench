@@ -84,13 +84,14 @@ def resolve_api_url() -> str:
 
 
 def seed_sample_if_empty(api_url: str) -> str | None:
-    """Ingest the bundled sample contract once, on a fresh (empty) index.
+    """Seed the bundled sample contract under each demonstration profile.
 
-    A deployed instance starts with empty ephemeral storage; this gives it
-    something to search *and* compare. It follows the public API like any other
-    client and only acts when the index is empty. Two profiles of the same
-    document are seeded so the Chunking Laboratory has something to contrast:
-    a `paragraph` profile and a `clause_aware` profile. Disable with
+    A deployed instance may start with empty ephemeral storage; this gives it
+    something to search *and* compare. Rather than gating only on "is the index
+    empty", it seeds whichever of the demonstration profiles is missing, so an
+    instance upgraded from an earlier deploy self-heals without a manual reset.
+    It follows the public API like any other client; re-running it is safe
+    because ingestion is idempotent per (document, profile). Disable with
     ``RAG_WORKBENCH_AUTOSEED=0``.
     """
 
@@ -98,12 +99,25 @@ def seed_sample_if_empty(api_url: str) -> str | None:
         return None
     if not _SAMPLE_CONTRACT.is_file():
         return None
+    strategies = ("paragraph", "clause_aware")
     try:
         health = httpx.get(f"{api_url}/health", timeout=10.0)
-        if health.status_code != 200 or health.json().get("document_count", 0) > 0:
+        if health.status_code != 200:
+            return None
+        # Seed only profiles that do not already exist, so the demo stays
+        # complete after a code upgrade while still avoiding needless re-ingest.
+        existing: set[str] = set()
+        if health.json().get("document_count", 0) > 0:
+            profiles = httpx.get(f"{api_url}/v1/profiles", timeout=10.0)
+            if profiles.status_code == 200:
+                existing = {
+                    p.get("chunker_strategy") for p in profiles.json().get("profiles", [])
+                }
+        needed = [s for s in strategies if s not in existing]
+        if not needed:
             return None
         seeded: list[str] = []
-        for strategy in ("paragraph", "clause_aware"):
+        for strategy in needed:
             response = httpx.post(
                 f"{api_url}/v1/documents",
                 files={"file": (_SAMPLE_CONTRACT.name, _SAMPLE_CONTRACT.read_bytes())},
