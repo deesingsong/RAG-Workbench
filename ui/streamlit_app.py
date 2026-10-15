@@ -808,7 +808,7 @@ def render_failure_explorer() -> None:
 
     st.markdown("**Diagnosis frequency** (queries per code)")
     if counts:
-        st.bar_chart(counts, key="failure-codes")
+        st.bar_chart(counts)
     else:
         st.caption("No diagnostics recorded for this experiment.")
 
@@ -897,7 +897,7 @@ def render_performance_lab() -> None:
             recall_by_stage[f"rank@{k}"] = float(aggregate[name])
     if recall_by_stage:
         st.markdown("**Candidate pool vs ranking recall**")
-        st.bar_chart(recall_by_stage, key="perf-recall")
+        st.bar_chart(recall_by_stage)
     st.caption(
         "candidate@N = share of relevant units present anywhere in the pool of N "
         "chunks; rank@K = share present in the final top-K. A large gap points at "
