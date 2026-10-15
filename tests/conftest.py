@@ -15,7 +15,7 @@ from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.vector_store import close_vector_stores
 from rag_workbench.retrieval.service import SearchService
-from tests.fakes import FakeEmbeddingProvider
+from tests.fakes import FakeEmbeddingProvider, FakeReranker
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
@@ -122,6 +122,21 @@ def contract_path() -> Path:
 @pytest.fixture
 def contract_bytes(contract_path: Path) -> bytes:
     return contract_path.read_bytes()
+
+
+@pytest.fixture
+def legal_contract_path() -> Path:
+    return FIXTURES_DIR / "legal_contract.txt"
+
+
+@pytest.fixture
+def legal_contract_bytes(legal_contract_path: Path) -> bytes:
+    return legal_contract_path.read_bytes()
+
+
+@pytest.fixture
+def fake_reranker() -> FakeReranker:
+    return FakeReranker()
 
 
 @pytest.fixture

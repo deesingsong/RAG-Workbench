@@ -1,0 +1,83 @@
+SOFTWARE LICENCE AND SERVICES AGREEMENT
+
+This Agreement is made between Helios Software Sdn. Bhd. (the "Supplier") and
+Meridian Retail Ltd. (the "Client").
+
+ARTICLE I
+DEFINITIONS AND INTERPRETATION
+
+1.1 "Confidential Information" means all non-public information disclosed by
+one party to the other, whether orally, in writing or in machine-readable form,
+and includes source code, pricing and customer lists.
+
+1.2 "Deliverable" means any software, report or dataset that the Supplier
+produces specifically for the Client under this Agreement.
+
+1.3 "Effective Date" means the date on which the last party signs this
+Agreement.
+
+ARTICLE II
+FEES AND PAYMENT
+
+2.1 Payment Terms
+
+The Client shall pay undisputed invoices within thirty (30) days of receipt.
+All amounts are stated exclusive of any applicable sales and service tax.
+Late payment interest of one and one half percent (1.5%) per month may accrue on
+overdue undisputed amounts, calculated from the due date until payment is
+received in full, and the Supplier may suspend services while any undisputed
+invoice remains overdue by more than sixty (60) days after written notice.
+
+2.2 Set-Off
+
+The Client may not set off any amount against fees payable under this Agreement
+unless the Supplier has agreed in writing.
+
+ARTICLE III
+TERM AND TERMINATION
+
+3.1 Termination for Convenience
+
+Either party may terminate this Agreement for convenience upon sixty (60) days
+written notice to the other party.
+
+3.2 Termination for Cause
+
+A party may terminate this Agreement immediately if the other party commits a
+material breach and fails to cure that breach within fifteen (15) days of
+written notice.
+
+3.3 Consequences of Termination
+
+On termination the following consequences apply.
+
+3.3(a) Accrued Fees
+
+The Client shall pay all fees for work performed before the effective date of
+termination.
+
+3.3(b) Return of Materials
+
+The Supplier shall return or destroy the Client's Confidential Information on
+request.
+
+ARTICLE IV
+CONFIDENTIALITY AND LIABILITY
+
+4.1 Confidentiality
+
+Each party shall protect the other party's Confidential Information using no
+less than a reasonable degree of care and shall not disclose it to third
+parties except as required by law.
+
+4.2 Limitation of Liability
+
+Neither party is liable for indirect or consequential loss. Each party's total
+aggregate liability under this Agreement is limited to the fees paid or payable
+in the twelve (12) months before the claim arose.
+
+SCHEDULE 1
+SERVICE LEVELS
+
+The Supplier shall maintain 99.9% availability excluding scheduled maintenance,
+measured monthly.

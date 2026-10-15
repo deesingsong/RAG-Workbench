@@ -20,6 +20,7 @@ from rag_workbench.domain.schemas import (
     ChunkData,
     EmbeddingBatch,
     ParsedDocument,
+    RerankBatch,
     SearchHit,
     VectorMatch,
     VectorPoint,
@@ -125,4 +126,36 @@ class VectorStore(Protocol):
     def drop(self, name: str) -> None: ...
 
 
-__all__ = ["Chunker", "DocumentParser", "EmbeddingProvider", "SparseRetriever", "VectorStore"]
+@runtime_checkable
+class Reranker(Protocol):
+    """Re-score query-passage pairs with a cross-encoder.
+
+    Implementations may be lazy: the model is not loaded until the first scoring
+    call. ``model_id``, ``revision`` and ``max_length`` describe exactly what
+    produced a score. Scores are relevance logits (larger is more relevant) and
+    are **not** calibrated probabilities.
+    """
+
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def revision(self) -> str | None: ...
+
+    @property
+    def max_length(self) -> int | None: ...
+
+    def ensure_loaded(self) -> float:
+        """Load the model if needed and return the one-off initialization time in ms."""
+
+    def score(self, query: str, passages: Sequence[str]) -> RerankBatch: ...
+
+
+__all__ = [
+    "Chunker",
+    "DocumentParser",
+    "EmbeddingProvider",
+    "Reranker",
+    "SparseRetriever",
+    "VectorStore",
+]

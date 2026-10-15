@@ -72,7 +72,11 @@ def render_corpus() -> None:
     with st.form("upload", clear_on_submit=True):
         uploaded = st.file_uploader("Upload a TXT, MD or text PDF", type=["txt", "md", "markdown", "pdf"])
         collection = st.text_input("Collection", value="default")
-        strategy = st.selectbox("Chunking strategy", ["paragraph", "fixed_token"])
+        strategy = st.selectbox(
+            "Chunking strategy",
+            ["paragraph", "fixed_token", "clause_aware"],
+            help="clause_aware preserves legal clause boundaries and section hierarchy",
+        )
         max_tokens = st.number_input("Max tokens", min_value=16, max_value=2048, value=220)
         overlap = st.number_input("Overlap tokens", min_value=0, max_value=1024, value=40)
         embed = st.checkbox("Build a dense profile (Sentence Transformers embeddings)")
@@ -263,11 +267,202 @@ def render_compare() -> None:
         )
 
 
+def _profile_options() -> list[dict]:
+    status, body = api_get("/v1/profiles")
+    if status == 200 and isinstance(body, dict):
+        return body.get("profiles", [])
+    return []
+
+
+def _profile_labels(profiles: list[dict]) -> dict[str, str]:
+    return {
+        f"{p['profile_id']} • {p['name']} ({p.get('chunker_strategy', '?')})": p["profile_id"]
+        for p in profiles
+    }
+
+
+def _render_chunk_profile(container, profile_id: str, label: str, limit: int) -> None:
+    with container:
+        st.subheader(label)
+        status, body = api_get(f"/v1/profiles/{profile_id}/chunks", limit=limit)
+        if status != 200 or not isinstance(body, dict):
+            st.error(f"Failed to load chunks ({status}): {body}")
+            return
+        chunks = body.get("chunks", [])
+        st.metric("Chunks", body.get("total", 0))
+        if chunks:
+            tokens = [chunk["token_count"] for chunk in chunks]
+            st.caption(f"avg tokens {sum(tokens) / len(tokens):.1f} • max {max(tokens)}")
+        else:
+            st.caption("No chunks for this profile.")
+        for chunk in chunks:
+            head = f"#{chunk['chunk_order']} • {chunk['token_count']} tok"
+            if chunk.get("section_number"):
+                head += f" • {chunk['section_number']}"
+            if chunk.get("section_title"):
+                head += f" {chunk['section_title']}"
+            with st.expander(head):
+                for note in chunk.get("diagnostics", []):
+                    st.info(note)
+                if chunk.get("section_path"):
+                    st.caption(f"section_path: {chunk['section_path']}")
+                if chunk.get("parent_clause"):
+                    st.caption(f"parent_clause: {chunk['parent_clause']}")
+                if chunk.get("page_start") is not None:
+                    st.caption(f"page: {chunk['page_start']}")
+                st.caption(
+                    f"chunk_id={chunk['chunk_id']} chars {chunk.get('char_start')}–{chunk.get('char_end')}"
+                )
+                st.write(chunk["text"])
+
+
+def render_chunking_lab() -> None:
+    st.header("Chunking Laboratory")
+    st.caption(
+        "Inspect stored chunks, clause boundaries and provenance per index profile. "
+        "Compare two profiles side by side to see how chunking changes."
+    )
+    profiles = _profile_options()
+    if not profiles:
+        st.warning("No index profiles yet — ingest a document first.")
+        return
+
+    labels = _profile_labels(profiles)
+    keys = list(labels.keys())
+    col1, col2, col3 = st.columns(3)
+    left = col1.selectbox("Profile A", keys, index=0, key="chunk_left")
+    right_choices = ["(none)"] + keys
+    # Default to a *different* profile so the comparison is meaningful on first use.
+    right_index = 2 if len(keys) >= 2 else 0
+    right = col2.selectbox(
+        "Profile B", right_choices, index=right_index, key="chunk_right"
+    )
+    limit = col3.slider("Chunks per profile", min_value=10, max_value=500, value=100)
+
+    if not st.button("Load chunks"):
+        return
+
+    left_col, right_col = st.columns(2)
+    _render_chunk_profile(left_col, labels[left], "Profile A", int(limit))
+    if right != "(none)":
+        _render_chunk_profile(right_col, labels[right], "Profile B", int(limit))
+    else:
+        with right_col:
+            st.caption("Select a second profile to compare.")
+
+
+def _post_search(payload: dict) -> tuple[int, object]:
+    return api_post("/v1/search", json=payload)
+
+
+def _render_rank_table(hits: list[dict]) -> None:
+    rows = []
+    for hit in hits:
+        rows.append(
+            {
+                "rank": hit["rank"],
+                "section": hit.get("section_number") or hit.get("section_path") or "",
+                "retrieval_rank": hit.get("retrieval_rank"),
+                "movement": hit.get("rank_movement"),
+                "rerank_score": hit.get("rerank_score"),
+                "retrieval_score": round(hit["score"], 4),
+                "source": hit.get("source_name"),
+            }
+        )
+    if rows:
+        st.dataframe(rows, use_container_width=True)
+
+
+def render_reranking_lab() -> None:
+    st.header("Reranking Laboratory")
+    st.caption(
+        "Run first-stage retrieval, then reorder the same candidates with a local "
+        "cross-encoder. Scores are relevance logits, not calibrated probabilities."
+    )
+    profiles = _profile_options()
+    if not profiles:
+        st.warning("No index profiles yet — ingest a document first.")
+        return
+
+    labels = _profile_labels(profiles)
+    query = st.text_input("Query", value="confidential information", key="rerank_query")
+    col1, col2, col3 = st.columns(3)
+    selected = col1.selectbox("Profile", list(labels.keys()), index=0, key="rerank_profile")
+    mode = col2.selectbox("Mode", ["bm25", "dense", "hybrid"], key="rerank_mode")
+    top_k = col3.slider("Top K", min_value=1, max_value=20, value=5, key="rerank_topk")
+    col4, col5, col6 = st.columns(3)
+    candidate_k = col4.slider("Rerank candidates", min_value=1, max_value=100, value=20)
+    reranker_model = col5.text_input(
+        "Cross-encoder model (blank = configured default)", value="", key="rerank_model"
+    )
+    col6.metric("Candidate depth", candidate_k)
+
+    if not st.button("Compare retrieval vs reranking") or not query.strip():
+        return
+    if candidate_k < top_k:
+        st.error("Rerank candidates must be greater than or equal to Top K.")
+        return
+
+    profile_id = labels[selected]
+    base_payload = {
+        "query": query,
+        "profile_id": profile_id,
+        "mode": mode,
+        "top_k": int(top_k),
+    }
+    status, baseline = _post_search(base_payload)
+    if status != 200 or not isinstance(baseline, dict):
+        st.error(f"Retrieval failed ({status}): {baseline}")
+        return
+
+    rerank_payload = {
+        **base_payload,
+        "rerank": True,
+        "rerank_candidates": int(candidate_k),
+    }
+    if reranker_model.strip():
+        rerank_payload["reranker_model"] = reranker_model.strip()
+    status, reranked = _post_search(rerank_payload)
+    if status != 200 or not isinstance(reranked, dict):
+        st.error(f"Reranking failed ({status}): {reranked}")
+        if status == 503:
+            st.info("Install the optional extra to enable reranking:  uv sync --extra dense")
+        return
+
+    info = reranked.get("reranker") or {}
+    st.caption(
+        f"model {info.get('model_id')} • candidates {reranked.get('rerank_candidates')} "
+        f"• init {reranked.get('timings_ms', {}).get('rerank_init')} ms "
+        f"• inference {reranked.get('timings_ms', {}).get('rerank_inference')} ms "
+        f"• total {reranked.get('total_ms')} ms"
+    )
+    for note in info.get("diagnostics", []) or []:
+        st.warning(note)
+
+    left_col, right_col = st.columns(2)
+    with left_col:
+        st.subheader("First-stage retrieval")
+        st.caption(f"total {baseline.get('total_ms')} ms • {baseline.get('timings_ms')}")
+        _render_rank_table(baseline.get("hits", []))
+    with right_col:
+        st.subheader("After cross-encoder rerank")
+        st.caption(f"total {reranked.get('total_ms')} ms • {reranked.get('timings_ms')}")
+        _render_rank_table(reranked.get("hits", []))
+
+    moved = [hit for hit in reranked.get("hits", []) if hit.get("rank_movement")]
+    if moved:
+        st.info(f"{len(moved)} passage(s) changed rank after reranking.")
+    else:
+        st.info("No rank changes for these candidates.")
+
+
 PAGES = {
     "Status": render_status,
     "Corpus Manager": render_corpus,
     "Search Playground": render_search,
     "Mode Comparison": render_compare,
+    "Chunking Laboratory": render_chunking_lab,
+    "Reranking Laboratory": render_reranking_lab,
 }
 
 
@@ -277,7 +472,10 @@ def main() -> None:
     seed_note = seed_sample_if_empty(API_URL)
 
     st.sidebar.title("RAG Workbench")
-    st.sidebar.caption("BM25 • dense (Sentence Transformers) • hybrid RRF")
+    st.sidebar.caption(
+        "BM25 • dense (Sentence Transformers) • hybrid RRF • clause-aware chunking "
+        "• cross-encoder reranking"
+    )
     if seed_note:
         st.sidebar.caption(seed_note)
     page = st.sidebar.radio("Navigate", list(PAGES.keys()))

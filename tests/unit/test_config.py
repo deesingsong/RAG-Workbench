@@ -51,3 +51,23 @@ def test_default_profile_matches_settings():
     profile = settings.default_profile()
     assert profile.chunker.strategy == "fixed_token"
     assert profile.chunker.max_tokens == 128
+
+
+def test_clause_aware_profile_key_is_isolated_from_paragraph():
+    paragraph = IndexProfileSpec(name="p", chunker=ChunkerConfig())
+    clause = IndexProfileSpec(name="p", chunker=ChunkerConfig(strategy="clause_aware"))
+    assert paragraph.key != clause.key
+    assert paragraph.config_hash != clause.config_hash
+
+
+def test_phase1_paragraph_profile_key_is_unchanged():
+    # Byte-identity guard: Phase 1/2 profiles must keep their exact key so
+    # existing indexes are never invalidated by Phase 3.
+    assert IndexProfileSpec(name="paragraph-220", chunker=ChunkerConfig()).key == (
+        "p-7e7c4428740184c3"
+    )
+    assert IndexProfileSpec(
+        name="fixed", chunker=ChunkerConfig(strategy="fixed_token", max_tokens=64)
+    ).key == IndexProfileSpec(
+        name="fixed-2", chunker=ChunkerConfig(strategy="fixed_token", max_tokens=64)
+    ).key

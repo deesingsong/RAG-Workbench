@@ -25,16 +25,18 @@ from rag_workbench.config import IndexProfileSpec, Settings
 from rag_workbench.domain.errors import (
     ProfileNotDenseError,
     ProfileNotFoundError,
+    RerankError,
     ValidationError,
     VectorIndexNotBuiltError,
 )
-from rag_workbench.domain.interfaces import EmbeddingProvider, VectorStore
+from rag_workbench.domain.interfaces import EmbeddingProvider, Reranker, VectorStore
 from rag_workbench.domain.schemas import SearchHit, SearchResponse
 from rag_workbench.embeddings import build_embedding_provider
 from rag_workbench.ingestion.vector_index import spec_from_profile_row
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.models import Chunk, Document, IndexProfile
 from rag_workbench.persistence.vector_store import get_vector_store
+from rag_workbench.reranking import build_reranker
 from rag_workbench.retrieval.bm25 import Bm25Retriever
 from rag_workbench.retrieval.dense import DenseRetriever
 from rag_workbench.retrieval.hybrid import reciprocal_rank_fusion
@@ -45,6 +47,7 @@ MAX_CANDIDATES = 500
 
 StoreFactory = Callable[[], VectorStore]
 ProviderFactory = Callable[[IndexProfileSpec], EmbeddingProvider]
+RerankerFactory = Callable[[str | None], Reranker]
 
 
 class SearchService:
@@ -57,6 +60,7 @@ class SearchService:
         *,
         vector_store_factory: StoreFactory | None = None,
         embedding_provider_factory: ProviderFactory | None = None,
+        reranker_factory: RerankerFactory | None = None,
     ) -> None:
         self._db = database
         self._settings = settings
@@ -66,6 +70,9 @@ class SearchService:
         )
         self._provider_factory: ProviderFactory = embedding_provider_factory or (
             lambda spec: build_embedding_provider(spec, settings)
+        )
+        self._reranker_factory: RerankerFactory = reranker_factory or (
+            lambda model_id: build_reranker(model_id, settings)
         )
         self._store: VectorStore | None = None
 
@@ -80,6 +87,9 @@ class SearchService:
         top_k: int = 5,
         collection: str | None = None,
         candidates: int | None = None,
+        rerank: bool = False,
+        reranker_model: str | None = None,
+        rerank_candidates: int | None = None,
     ) -> SearchResponse:
         if mode not in SUPPORTED_MODES:
             raise ValidationError(
@@ -95,21 +105,40 @@ class SearchService:
             )
         candidate_k = max(candidate_k, top_k)
 
+        # Reranking retrieves a deeper pool than the final result count. The pool
+        # is configurable independently of ``top_k`` and must cover it.
+        rerank_pool: int | None = None
+        if rerank:
+            rerank_pool = (
+                self._settings.rerank_candidates if rerank_candidates is None else rerank_candidates
+            )
+            if rerank_pool < 1 or rerank_pool > MAX_CANDIDATES:
+                raise ValidationError(
+                    f"rerank_candidates must be between 1 and {MAX_CANDIDATES}",
+                    code="invalid_candidates",
+                )
+            if rerank_pool < top_k:
+                raise ValidationError(
+                    "rerank_candidates must be greater than or equal to top_k",
+                    code="invalid_candidates",
+                )
+        retrieval_k = max(rerank_pool, top_k) if rerank_pool is not None else top_k
+
         started = time.perf_counter()
         with self._db.session() as session:
             profile = self._resolve_profile(session, profile_id)
 
             if mode == "bm25":
                 hits, timings = self._run_bm25(
-                    session, query=query, profile=profile, top_k=top_k, collection=collection
+                    session, query=query, profile=profile, top_k=retrieval_k, collection=collection
                 )
             elif mode == "dense":
                 hits, timings = self._run_dense(
                     session,
                     query=query,
                     profile=profile,
-                    top_k=top_k,
-                    candidates=candidate_k,
+                    top_k=retrieval_k,
+                    candidates=max(candidate_k, retrieval_k),
                     collection=collection,
                 )
             else:
@@ -117,10 +146,17 @@ class SearchService:
                     session,
                     query=query,
                     profile=profile,
-                    top_k=top_k,
-                    candidates=candidate_k,
+                    top_k=retrieval_k,
+                    candidates=max(candidate_k, retrieval_k),
                     collection=collection,
                 )
+
+            reranker_meta: dict[str, object] | None = None
+            if rerank:
+                hits, rerank_timings, reranker_meta = self._apply_rerank(
+                    query=query, hits=hits, top_k=top_k, reranker_model=reranker_model
+                )
+                timings.update(rerank_timings)
 
         total_ms = (time.perf_counter() - started) * 1000.0
         timings["total"] = round(total_ms, 3)
@@ -133,6 +169,9 @@ class SearchService:
             collection=collection,
             top_k=top_k,
             candidates=candidate_k if mode != "bm25" else None,
+            rerank=rerank,
+            rerank_candidates=rerank_pool,
+            reranker=reranker_meta,
             timings_ms=timings,
             total_ms=round(total_ms, 3),
             hits=hits,
@@ -153,7 +192,7 @@ class SearchService:
         hits = self._bm25.search(
             session, query=query, profile_id=profile.id, top_k=top_k, collection=collection
         )
-        return hits, {"retrieval": self._ms(started)}
+        return hits, {"lexical": self._ms(started)}
 
     def _run_dense(
         self,
@@ -230,6 +269,9 @@ class SearchService:
                     score=item.score,
                     score_kind="rrf",
                     section_path=chunk.section_path,
+                    section_number=chunk.section_number,
+                    section_title=chunk.section_title,
+                    parent_clause=chunk.parent_clause,
                     page_start=chunk.page_start,
                     page_end=chunk.page_end,
                     bm25_rank=lexical.rank if lexical else None,
@@ -240,6 +282,73 @@ class SearchService:
                 )
             )
         return hits, timings
+
+    # ------------------------------------------------------------------ rerank
+
+    def _apply_rerank(
+        self,
+        *,
+        query: str,
+        hits: list[SearchHit],
+        top_k: int,
+        reranker_model: str | None,
+    ) -> tuple[list[SearchHit], dict[str, float], dict[str, object]]:
+        """Re-order a candidate list with a cross-encoder; never add candidates."""
+
+        reranker = self._reranker_factory(reranker_model)
+        timings: dict[str, float] = {}
+        init_ms = reranker.ensure_loaded()
+        timings["rerank_init"] = init_ms
+
+        if not hits:
+            return [], timings, self._reranker_meta(reranker, truncated=0, diagnostics=[])
+
+        passages = [hit.text for hit in hits]
+        inference_started = time.perf_counter()
+        batch = reranker.score(query, passages)
+        timings["rerank_inference"] = self._ms(inference_started)
+
+        if len(batch.scores) != len(hits):
+            raise RerankError(
+                f"reranker returned {len(batch.scores)} scores for {len(hits)} candidates"
+            )
+
+        # Rank by descending cross-encoder score; break ties deterministically by
+        # the original retrieval rank and then by chunk ID.
+        scored = list(zip(hits, batch.scores, strict=True))
+        scored.sort(key=lambda item: (-item[1], item[0].rank, item[0].chunk_id))
+
+        results: list[SearchHit] = []
+        for final_rank, (hit, score) in enumerate(scored[:top_k], start=1):
+            original_rank = hit.rank
+            results.append(
+                hit.model_copy(
+                    update={
+                        "rank": final_rank,
+                        "rerank_score": score,
+                        "retrieval_rank": original_rank,
+                        "retrieval_score": hit.score,
+                        "retrieval_score_kind": hit.score_kind,
+                        "rank_movement": original_rank - final_rank,
+                    }
+                )
+            )
+        meta = self._reranker_meta(
+            reranker, truncated=batch.truncated_count, diagnostics=batch.diagnostics
+        )
+        return results, timings, meta
+
+    def _reranker_meta(
+        self, reranker: Reranker, *, truncated: int, diagnostics: list[str]
+    ) -> dict[str, object]:
+        return {
+            "model_id": reranker.model_id,
+            "revision": reranker.revision,
+            "max_length": reranker.max_length,
+            "batch_size": self._settings.reranker_batch_size,
+            "truncated_pairs": truncated,
+            "diagnostics": list(diagnostics),
+        }
 
     # ------------------------------------------------------------------ helpers
 

@@ -82,3 +82,15 @@ class VectorIndexNotBuiltError(VectorStoreError):
     """A dense search ran against a profile whose vector index does not exist yet."""
 
     code = "vector_index_not_built"
+
+
+class RerankerUnavailableError(RagWorkbenchError):
+    """Reranking was requested but its dependencies or model are missing."""
+
+    code = "reranker_unavailable"
+
+
+class RerankError(RagWorkbenchError):
+    """The reranker ran but the request could not be satisfied."""
+
+    code = "rerank_error"

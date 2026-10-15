@@ -63,6 +63,26 @@ class ChunkData(BaseModel):
     page_end: int | None = None
     char_start: int | None = None
     char_end: int | None = None
+    # Clause-aware provenance. Populated only when it could be derived
+    # deterministically; ``None`` means genuinely unknown, never a guess.
+    section_number: str | None = None
+    section_title: str | None = None
+    parent_clause: str | None = None
+    section_level: int | None = None
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class RerankBatch(BaseModel):
+    """Cross-encoder scores for a batch of query-passage pairs.
+
+    Scores are raw cross-encoder relevance logits: **larger is more relevant**,
+    but they are not calibrated probabilities and must not be described as such.
+    """
+
+    scores: list[float]
+    max_length: int | None = None
+    truncated_count: int = 0
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class EmbeddingBatch(BaseModel):
@@ -104,6 +124,11 @@ class SearchHit(BaseModel):
 
     For hybrid results the original component ranks/scores are preserved in the
     ``bm25_*`` and ``dense_*`` fields so rank movements can be inspected.
+
+    When reranking is enabled ``rank`` is the *final* (post-rerank) position and
+    the pre-rerank position is captured in ``retrieval_rank``; ``rerank_score``
+    holds the cross-encoder score and ``rank_movement`` is
+    ``retrieval_rank - rank`` (positive means the passage moved up).
     """
 
     rank: int
@@ -123,6 +148,15 @@ class SearchHit(BaseModel):
     dense_rank: int | None = None
     dense_score: float | None = None
     fused_score: float | None = None
+    section_number: str | None = None
+    section_title: str | None = None
+    parent_clause: str | None = None
+    # Reranking diagnostics (populated only when reranking ran).
+    rerank_score: float | None = None
+    retrieval_rank: int | None = None
+    retrieval_score: float | None = None
+    retrieval_score_kind: ScoreKind | None = None
+    rank_movement: int | None = None
 
 
 class IngestionResult(BaseModel):
@@ -159,9 +193,35 @@ class SearchResponse(BaseModel):
     collection: str | None = None
     top_k: int
     candidates: int | None = None
+    rerank: bool = False
+    rerank_candidates: int | None = None
+    reranker: dict[str, object] | None = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
     total_ms: float | None = None
     hits: list[SearchHit] = Field(default_factory=list)
+
+
+class ChunkRecord(BaseModel):
+    """A stored chunk with full provenance, for the chunking laboratory."""
+
+    chunk_id: str
+    document_id: str
+    profile_id: str
+    source_name: str
+    collection: str
+    chunk_order: int
+    text: str
+    token_count: int
+    section_path: str | None = None
+    section_number: str | None = None
+    section_title: str | None = None
+    parent_clause: str | None = None
+    section_level: int | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    char_start: int | None = None
+    char_end: int | None = None
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class VectorIndexStatus(BaseModel):

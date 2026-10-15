@@ -27,7 +27,7 @@ DEFAULT_PARSER_VERSION = "1.0.0"
 #: Bumped when the on-disk index layout changes.
 INDEX_VERSION = "1"
 
-ChunkStrategy = Literal["fixed_token", "paragraph"]
+ChunkStrategy = Literal["fixed_token", "paragraph", "clause_aware"]
 SimilarityMetric = Literal["cosine"]
 
 #: Known embedding dimensions for models whose dimension should not be guessed.
@@ -38,6 +38,10 @@ DEFAULT_EMBEDDING_DIMENSIONS: dict[str, int] = {
 }
 
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+
+#: Default local cross-encoder used for optional second-stage reranking.
+#: Cross-encoder scores are relevance logits, not calibrated probabilities.
+DEFAULT_RERANKER_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 
 
 class ChunkerConfig(BaseModel):
@@ -185,6 +189,13 @@ class Settings(BaseSettings):
     vector_dir_name: str = "qdrant"
     dense_candidate_k: int = Field(default=50, ge=1, le=1000)
     rrf_k: int = Field(default=60, ge=1, le=10000)
+
+    # Cross-encoder reranking (optional; only loaded when a search requests it).
+    reranker_model: str = DEFAULT_RERANKER_MODEL
+    reranker_revision: str | None = None
+    reranker_batch_size: int = Field(default=32, ge=1, le=512)
+    reranker_max_length: int | None = Field(default=None, ge=8, le=8192)
+    rerank_candidates: int = Field(default=20, ge=1, le=500)
 
     @property
     def max_upload_bytes(self) -> int:

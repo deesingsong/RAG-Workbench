@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
 from rag_workbench.api.deps import get_ingestion_service, get_settings
 from rag_workbench.api.schemas import (
+    ChunkListResponse,
     DocumentListResponse,
     DocumentRecord,
     IngestionJobResponse,
@@ -174,3 +175,21 @@ def list_profiles(
 ) -> ProfileListResponse:
     profiles = service.list_profiles()
     return ProfileListResponse(total=len(profiles), profiles=profiles)
+
+
+@router.get(
+    "/profiles/{profile_id}/chunks",
+    response_model=ChunkListResponse,
+    tags=["documents"],
+)
+def list_chunks(
+    profile_id: str,
+    document_id: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+    service: IngestionService = Depends(get_ingestion_service),
+) -> ChunkListResponse:
+    chunks, total = service.list_chunks(
+        profile_id, document_id=document_id, limit=limit, offset=offset
+    )
+    return ChunkListResponse(total=total, limit=limit, offset=offset, chunks=chunks)

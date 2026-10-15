@@ -64,6 +64,13 @@ COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     "index_profiles": {
         "embedding_params": "JSON",
     },
+    "chunks": {
+        "section_number": "TEXT",
+        "section_title": "TEXT",
+        "parent_clause": "TEXT",
+        "section_level": "INTEGER",
+        "diagnostics": "JSON",
+    },
 }
 
 

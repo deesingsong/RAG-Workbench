@@ -5,6 +5,9 @@
     rag-workbench ingest path/to/file.pdf --embed          # dense profile
     rag-workbench search "termination for convenience" --top-k 5
     rag-workbench search "termination" --mode hybrid       # BM25 + dense + RRF
+    rag-workbench search "termination" --rerank            # + cross-encoder rerank
+    rag-workbench ingest contract.txt --strategy clause_aware
+    rag-workbench chunks --profile <id>
     rag-workbench documents
     rag-workbench profiles
     rag-workbench rebuild-vectors --all
@@ -45,7 +48,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("path", type=Path, help="path to the document")
     ingest.add_argument("--collection", default=None, help="collection (dataset) name")
     ingest.add_argument(
-        "--strategy", choices=["paragraph", "fixed_token"], default=None, help="chunking strategy"
+        "--strategy",
+        choices=["paragraph", "fixed_token", "clause_aware"],
+        default=None,
+        help="chunking strategy",
     )
     ingest.add_argument("--max-tokens", type=int, default=None)
     ingest.add_argument("--overlap-tokens", type=int, default=None)
@@ -78,7 +84,27 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="candidate pool for dense/hybrid",
     )
+    search.add_argument(
+        "--rerank", action="store_true", help="rerank candidates with a cross-encoder"
+    )
+    search.add_argument(
+        "--reranker-model",
+        default=None,
+        help="cross-encoder model id (default: cross-encoder/ms-marco-MiniLM-L6-v2)",
+    )
+    search.add_argument(
+        "--rerank-candidates",
+        type=int,
+        default=None,
+        help="candidate depth to rerank (default 20; must be >= --top-k)",
+    )
     search.add_argument("--json", action="store_true")
+
+    chunks = sub.add_parser("chunks", help="list stored chunks and their provenance")
+    chunks.add_argument("--profile", default=None, help="index profile ID (default: newest)")
+    chunks.add_argument("--document", default=None, help="restrict to one document ID")
+    chunks.add_argument("--limit", type=int, default=200)
+    chunks.add_argument("--json", action="store_true")
 
     documents = sub.add_parser("documents", help="list indexed documents")
     documents.add_argument("--collection", default=None)
@@ -165,14 +191,23 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
         top_k=args.top_k,
         collection=args.collection,
         candidates=args.candidates,
+        rerank=args.rerank,
+        reranker_model=args.reranker_model,
+        rerank_candidates=args.rerank_candidates,
     )
     if args.json:
         print(response.model_dump_json(indent=2))
         return 0
 
+    rerank_note = ""
+    if response.rerank and response.reranker:
+        rerank_note = (
+            f" rerank={response.reranker.get('model_id')} "
+            f"pool={response.rerank_candidates}"
+        )
     print(
         f"query={response.query!r} mode={response.mode} profile={response.profile_id} "
-        f"({response.profile_name}) hits={len(response.hits)} "
+        f"({response.profile_name}) hits={len(response.hits)}{rerank_note} "
         f"total_ms={response.total_ms} timings_ms={response.timings_ms}"
     )
     if not response.hits:
@@ -189,8 +224,48 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
         components = ""
         if hit.bm25_rank is not None or hit.dense_rank is not None:
             components = f" [bm25_rank={hit.bm25_rank} dense_rank={hit.dense_rank}]"
-        print(f"  #{hit.rank} {hit.score_kind}={hit.score:.4f} {where}{components}")
+        rerank_info = ""
+        if hit.retrieval_rank is not None:
+            movement = hit.rank_movement or 0
+            rerank_info = (
+                f" [retrieval_rank={hit.retrieval_rank} rerank_score={hit.rerank_score:.4f} "
+                f"movement={movement:+d}]"
+            )
+        print(f"  #{hit.rank} {hit.score_kind}={hit.score:.4f} {where}{components}{rerank_info}")
         print(f"     {excerpt[:200]}")
+    return 0
+
+
+def _cmd_chunks(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    service = IngestionService(database, settings)
+    profile_id = args.profile
+    if profile_id is None:
+        profiles = service.list_profiles()
+        if not profiles:
+            print("no index profiles exist yet", file=sys.stderr)
+            return 0
+        profile_id = profiles[-1].profile_id
+    chunks, total = service.list_chunks(
+        profile_id, document_id=args.document, limit=args.limit
+    )
+    if args.json:
+        print(
+            json.dumps(
+                {"profile_id": profile_id, "total": total,
+                 "chunks": [c.model_dump(mode="json") for c in chunks]},
+                indent=2,
+            )
+        )
+        return 0
+    print(f"profile={profile_id} chunks={total}")
+    for chunk in chunks:
+        where = chunk.section_path or "(no section)"
+        number = f" [{chunk.section_number}]" if chunk.section_number else ""
+        pages = f" p.{chunk.page_start}" if chunk.page_start is not None else ""
+        print(f"  #{chunk.chunk_order} tokens={chunk.token_count}{pages} {where}{number}")
+        print(f"     {' '.join(chunk.text.split())[:160]}")
+        for note in chunk.diagnostics:
+            print(f"     note: {note}")
     return 0
 
 
@@ -314,6 +389,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_documents(settings, database, args)
         if args.command == "profiles":
             return _cmd_profiles(settings, database, args)
+        if args.command == "chunks":
+            return _cmd_chunks(settings, database, args)
         if args.command == "rebuild-vectors":
             return _cmd_rebuild_vectors(settings, database, args)
         if args.command == "vectors-status":

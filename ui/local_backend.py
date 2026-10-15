@@ -87,8 +87,11 @@ def seed_sample_if_empty(api_url: str) -> str | None:
     """Ingest the bundled sample contract once, on a fresh (empty) index.
 
     A deployed instance starts with empty ephemeral storage; this gives it
-    something to search. It calls the public API like any other client and only
-    acts when the index is empty. Disable with ``RAG_WORKBENCH_AUTOSEED=0``.
+    something to search *and* compare. It follows the public API like any other
+    client and only acts when the index is empty. Two profiles of the same
+    document are seeded so the Chunking Laboratory has something to contrast:
+    a `paragraph` profile and a `clause_aware` profile. Disable with
+    ``RAG_WORKBENCH_AUTOSEED=0``.
     """
 
     if os.environ.get("RAG_WORKBENCH_AUTOSEED", "1").strip().lower() in {"0", "false", "no"}:
@@ -99,15 +102,19 @@ def seed_sample_if_empty(api_url: str) -> str | None:
         health = httpx.get(f"{api_url}/health", timeout=10.0)
         if health.status_code != 200 or health.json().get("document_count", 0) > 0:
             return None
-        response = httpx.post(
-            f"{api_url}/v1/documents",
-            files={"file": (_SAMPLE_CONTRACT.name, _SAMPLE_CONTRACT.read_bytes())},
-            data={"collection": "contracts", "strategy": "paragraph"},
-            timeout=120.0,
-        )
+        seeded: list[str] = []
+        for strategy in ("paragraph", "clause_aware"):
+            response = httpx.post(
+                f"{api_url}/v1/documents",
+                files={"file": (_SAMPLE_CONTRACT.name, _SAMPLE_CONTRACT.read_bytes())},
+                data={"collection": "contracts", "strategy": strategy},
+                timeout=120.0,
+            )
+            if response.status_code == 201:
+                chunks = response.json().get("chunk_count")
+                seeded.append(f"{strategy} ({chunks} chunks)")
     except httpx.HTTPError as exc:  # pragma: no cover - deployment convenience
         return f"Sample seed skipped: {exc}"
-    if response.status_code == 201:
-        chunks = response.json().get("chunk_count")
-        return f"Seeded the bundled sample contract ({chunks} chunks)."
+    if seeded:
+        return "Seeded the bundled sample contract: " + ", ".join(seeded) + "."
     return None

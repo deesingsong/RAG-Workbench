@@ -25,6 +25,8 @@ from rag_workbench.domain.errors import (
     NotFoundError,
     ParsingError,
     RagWorkbenchError,
+    RerankError,
+    RerankerUnavailableError,
     SearchError,
     UnsupportedFileTypeError,
     ValidationError,
@@ -50,6 +52,8 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     DimensionMismatchError: 422,
     DenseUnavailableError: 503,
     VectorStoreError: 503,
+    RerankerUnavailableError: 503,
+    RerankError: 400,
 }
 
 

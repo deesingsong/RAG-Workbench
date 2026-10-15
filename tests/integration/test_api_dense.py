@@ -36,7 +36,7 @@ def test_bm25_api_is_backward_compatible(client: TestClient, contract_bytes: byt
     assert payload["candidates"] is None
     assert payload["hits"]
     assert all(hit["score_kind"] == "bm25" for hit in payload["hits"])
-    assert payload["timings_ms"]["retrieval"] >= 0
+    assert payload["timings_ms"]["lexical"] >= 0
 
 
 def test_dense_ingest_and_search_via_api(dense_client: TestClient, contract_bytes: bytes) -> None:

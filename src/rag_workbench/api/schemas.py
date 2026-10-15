@@ -11,6 +11,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from rag_workbench.domain.schemas import (
+    ChunkRecord,
     DocumentRecord,
     IngestionResult,
     ProfileRecord,
@@ -37,6 +38,9 @@ class SearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50)
     collection: str | None = None
     candidates: int | None = Field(default=None, ge=1, le=500)
+    rerank: bool = False
+    reranker_model: str | None = Field(default=None, max_length=200)
+    rerank_candidates: int | None = Field(default=None, ge=1, le=500)
 
 
 class VectorRebuildRequest(BaseModel):
@@ -70,6 +74,13 @@ class ProfileListResponse(BaseModel):
     profiles: list[ProfileRecord]
 
 
+class ChunkListResponse(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    chunks: list[ChunkRecord]
+
+
 class IngestionJobResponse(BaseModel):
     job_id: str
     document_id: str | None
@@ -93,6 +104,7 @@ class ErrorResponse(BaseModel):
 
 
 __all__ = [
+    "ChunkListResponse",
     "DocumentListResponse",
     "ErrorResponse",
     "HealthResponse",

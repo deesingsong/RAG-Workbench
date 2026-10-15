@@ -36,6 +36,7 @@ from rag_workbench.domain.errors import (
     RagWorkbenchError,
 )
 from rag_workbench.domain.schemas import (
+    ChunkRecord,
     DocumentDeleteResult,
     DocumentRecord,
     IngestionResult,
@@ -197,6 +198,11 @@ class IngestionService:
                             page_end=chunk.page_end,
                             char_start=chunk.char_start,
                             char_end=chunk.char_end,
+                            section_number=chunk.section_number,
+                            section_title=chunk.section_title,
+                            parent_clause=chunk.parent_clause,
+                            section_level=chunk.section_level,
+                            diagnostics=list(chunk.diagnostics),
                         )
                         for chunk in chunk_data
                     ]
@@ -410,6 +416,59 @@ class IngestionService:
                 .all()
             )
             return [self._profile_record(session, row) for row in rows]
+
+    def list_chunks(
+        self,
+        profile_id: str,
+        *,
+        document_id: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> tuple[list[ChunkRecord], int]:
+        """Return stored chunks for a profile, with full provenance."""
+
+        limit = max(1, min(limit, 1000))
+        with self._db.session() as session:
+            if session.get(IndexProfile, profile_id) is None:
+                raise NotFoundError(f"index profile not found: {profile_id}")
+            filters = [Chunk.profile_id == profile_id]
+            if document_id is not None:
+                filters.append(Chunk.document_id == document_id)
+            total = int(
+                session.query(func.count(Chunk.id)).filter(*filters).scalar() or 0
+            )
+            rows = session.execute(
+                select(Chunk, Document)
+                .join(Document, Document.id == Chunk.document_id)
+                .where(*filters)
+                .order_by(Chunk.document_id, Chunk.chunk_order)
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            records = [
+                ChunkRecord(
+                    chunk_id=chunk.chunk_id,
+                    document_id=chunk.document_id,
+                    profile_id=chunk.profile_id,
+                    source_name=document.source_name,
+                    collection=document.collection,
+                    chunk_order=chunk.chunk_order,
+                    text=chunk.text,
+                    token_count=chunk.token_count,
+                    section_path=chunk.section_path,
+                    section_number=chunk.section_number,
+                    section_title=chunk.section_title,
+                    parent_clause=chunk.parent_clause,
+                    section_level=chunk.section_level,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    char_start=chunk.char_start,
+                    char_end=chunk.char_end,
+                    diagnostics=list(chunk.diagnostics or []),
+                )
+                for chunk, document in rows
+            ]
+            return records, total
 
     def get_job(self, job_id: str) -> IngestionJob:
         with self._db.session() as session:

@@ -108,6 +108,13 @@ class Chunk(Base):
     page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     char_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Clause-aware provenance (Phase 3). Nullable so Phase 1/2 databases migrate
+    # additively; ``None`` means the value could not be derived deterministically.
+    section_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    section_title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_clause: Mapped[str | None] = mapped_column(Text, nullable=True)
+    section_level: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    diagnostics: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
     document: Mapped[Document] = relationship(back_populates="chunks")
     profile: Mapped[IndexProfile] = relationship(back_populates="chunks")

@@ -112,6 +112,9 @@ class DenseRetriever:
                     score=float(score_by_id[chunk_id]),
                     score_kind="cosine",
                     section_path=chunk.section_path,
+                    section_number=chunk.section_number,
+                    section_title=chunk.section_title,
+                    parent_clause=chunk.parent_clause,
                     page_start=chunk.page_start,
                     page_end=chunk.page_end,
                 )
