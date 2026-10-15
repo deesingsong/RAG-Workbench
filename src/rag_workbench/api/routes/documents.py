@@ -53,6 +53,9 @@ def _build_profile(
     max_tokens: int | None,
     overlap_tokens: int | None,
     name: str | None,
+    embed: bool = False,
+    embedding_model: str | None = None,
+    embedding_dimension: int | None = None,
 ) -> IndexProfileSpec:
     try:
         chunker = ChunkerConfig(
@@ -64,6 +67,18 @@ def _build_profile(
         )
     except ValueError as exc:
         raise ValidationError(f"invalid chunking configuration: {exc}") from exc
+
+    if embed:
+        try:
+            return settings.dense_profile(
+                name=name or f"dense-{chunker.strategy}-{chunker.max_tokens}",
+                chunker=chunker,
+                embedding_model=embedding_model,
+                embedding_dimension=embedding_dimension,
+            )
+        except ValueError as exc:
+            raise ValidationError(f"invalid dense configuration: {exc}") from exc
+
     profile_name = name or f"{chunker.strategy}-{chunker.max_tokens}"
     return IndexProfileSpec(name=profile_name, chunker=chunker)
 
@@ -76,6 +91,9 @@ async def upload_document(
     max_tokens: int | None = Form(default=None),
     overlap_tokens: int | None = Form(default=None),
     profile_name: str | None = Form(default=None),
+    embed: bool = Form(default=False),
+    embedding_model: str | None = Form(default=None),
+    embedding_dimension: int | None = Form(default=None),
     settings: Settings = Depends(get_settings),
     service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestionResult:
@@ -86,6 +104,9 @@ async def upload_document(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
         name=profile_name,
+        embed=embed,
+        embedding_model=embedding_model,
+        embedding_dimension=embedding_dimension,
     )
     return service.ingest_bytes(
         data,

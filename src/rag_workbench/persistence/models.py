@@ -51,6 +51,10 @@ class IndexProfile(Base):
     chunker_params: Mapped[dict] = mapped_column(JSON, nullable=False)
     embedding_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
     embedding_dimension: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Revision, metric, normalization and preprocessing prefixes. Kept as JSON so
+    # adding a dense identity field does not require a new column each time; the
+    # profile *key* (not this blob) is what guarantees index isolation.
+    embedding_params: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     index_version: Mapped[str] = mapped_column(String(32), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

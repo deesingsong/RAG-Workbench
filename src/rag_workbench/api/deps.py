@@ -11,6 +11,7 @@ from fastapi import Request
 
 from rag_workbench.config import Settings
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.persistence.database import Database
 from rag_workbench.retrieval.service import SearchService
 
@@ -29,3 +30,7 @@ def get_ingestion_service(request: Request) -> IngestionService:
 
 def get_search_service(request: Request) -> SearchService:
     return request.app.state.search_service
+
+
+def get_vector_indexer(request: Request) -> VectorIndexer:
+    return request.app.state.vector_indexer

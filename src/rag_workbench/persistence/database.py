@@ -55,6 +55,17 @@ FTS_DDL: tuple[str, ...] = (
 # Rebuilds the whole index from the content table; useful after manual repair.
 FTS_REBUILD = "INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')"
 
+# Explicit, additive schema migrations for databases created by earlier phases.
+# Each entry maps a table to {column_name: column DDL}. ``create_schema`` adds any
+# missing column with ``ALTER TABLE ... ADD COLUMN``, which is safe and preserves
+# existing rows. Phase 2 adds ``index_profiles.embedding_params``; Phase 1
+# databases keep all their documents, chunks and profiles.
+COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
+    "index_profiles": {
+        "embedding_params": "JSON",
+    },
+}
+
 
 def _is_sqlite(url: str) -> bool:
     return url.startswith("sqlite")
@@ -94,7 +105,11 @@ class Database:
         cursor.close()
 
     def create_schema(self) -> None:
-        """Create relational tables, the FTS5 table and its triggers."""
+        """Create relational tables, the FTS5 table and its triggers.
+
+        Also applies additive column migrations so a database created by an
+        earlier phase gains new columns without losing data.
+        """
 
         path = _sqlite_path(self.url) if self.is_sqlite else None
         if path is not None:
@@ -102,8 +117,22 @@ class Database:
 
         Base.metadata.create_all(self.engine)
         with self.engine.begin() as connection:
+            self._apply_column_migrations(connection)
             for statement in FTS_DDL:
                 connection.execute(text(statement))
+
+    @staticmethod
+    def _apply_column_migrations(connection) -> None:  # noqa: ANN001 - sqlalchemy Connection
+        for table, columns in COLUMN_MIGRATIONS.items():
+            existing = {
+                row[1]
+                for row in connection.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            }
+            if not existing:
+                continue  # table not present yet; create_all will build it fully
+            for column, ddl in columns.items():
+                if column not in existing:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 
     def rebuild_fts(self) -> None:
         """Rebuild the FTS index from the chunks table."""

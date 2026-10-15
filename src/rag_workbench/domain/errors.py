@@ -52,3 +52,33 @@ class NotFoundError(RagWorkbenchError):
 
 class ProfileNotFoundError(NotFoundError):
     code = "profile_not_found"
+
+
+class DenseUnavailableError(RagWorkbenchError):
+    """Dense retrieval was requested but its dependencies or model are missing."""
+
+    code = "dense_unavailable"
+
+
+class VectorStoreError(RagWorkbenchError):
+    """The vector store could not be opened, queried or written."""
+
+    code = "vector_store_error"
+
+
+class DimensionMismatchError(RagWorkbenchError):
+    """A vector's dimension does not match the configured profile/collection."""
+
+    code = "dimension_mismatch"
+
+
+class ProfileNotDenseError(ValidationError):
+    """A dense-only operation was requested for a lexical-only profile."""
+
+    code = "profile_not_dense"
+
+
+class VectorIndexNotBuiltError(VectorStoreError):
+    """A dense search ran against a profile whose vector index does not exist yet."""
+
+    code = "vector_index_not_built"

@@ -2,9 +2,13 @@
 
     rag-workbench init-db
     rag-workbench ingest path/to/file.pdf --collection contracts
+    rag-workbench ingest path/to/file.pdf --embed          # dense profile
     rag-workbench search "termination for convenience" --top-k 5
+    rag-workbench search "termination" --mode hybrid       # BM25 + dense + RRF
     rag-workbench documents
     rag-workbench profiles
+    rag-workbench rebuild-vectors --all
+    rag-workbench vectors-status
     rag-workbench serve
 
 The CLI, the API and the tests all call the same core services; the CLI adds no
@@ -21,15 +25,17 @@ from pathlib import Path
 from rag_workbench.config import ChunkerConfig, IndexProfileSpec, Settings, get_settings
 from rag_workbench.domain.errors import RagWorkbenchError
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
+from rag_workbench.persistence.vector_store import close_vector_stores
 from rag_workbench.retrieval.service import SearchService
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rag-workbench",
-        description="Local-first RAG retrieval laboratory (Phase 0-1: ingestion + BM25).",
+        description="Local-first RAG retrieval laboratory (ingestion, BM25, dense, hybrid).",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -44,13 +50,34 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest.add_argument("--max-tokens", type=int, default=None)
     ingest.add_argument("--overlap-tokens", type=int, default=None)
     ingest.add_argument("--name", default=None, help="human label for the index profile")
+    ingest.add_argument(
+        "--embed", action="store_true", help="create a dense profile and index embeddings"
+    )
+    ingest.add_argument(
+        "--embedding-model", default=None, help="Sentence Transformers model id (with --embed)"
+    )
+    ingest.add_argument(
+        "--embedding-dimension",
+        type=int,
+        default=None,
+        help="explicit vector dimension (with --embed)",
+    )
     ingest.add_argument("--json", action="store_true", help="emit machine-readable JSON")
 
-    search = sub.add_parser("search", help="run a BM25 search")
+    search = sub.add_parser("search", help="run a BM25, dense or hybrid search")
     search.add_argument("query", nargs="+", help="query text")
     search.add_argument("--top-k", type=int, default=5)
     search.add_argument("--profile", default=None, help="index profile ID")
     search.add_argument("--collection", default=None)
+    search.add_argument(
+        "--mode", choices=["bm25", "dense", "hybrid"], default="bm25", help="retrieval mode"
+    )
+    search.add_argument(
+        "--candidates",
+        type=int,
+        default=None,
+        help="candidate pool for dense/hybrid",
+    )
     search.add_argument("--json", action="store_true")
 
     documents = sub.add_parser("documents", help="list indexed documents")
@@ -60,6 +87,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     profiles = sub.add_parser("profiles", help="list index profiles")
     profiles.add_argument("--json", action="store_true")
+
+    rebuild = sub.add_parser("rebuild-vectors", help="rebuild dense vector indexes from SQLite")
+    rebuild.add_argument("--profile", default=None, help="index profile ID")
+    rebuild.add_argument(
+        "--all", dest="all_profiles", action="store_true", help="every dense profile"
+    )
+    rebuild.add_argument(
+        "--keep", action="store_true", help="do not drop the collection first (repair in place)"
+    )
+    rebuild.add_argument("--json", action="store_true")
+
+    status = sub.add_parser("vectors-status", help="compare vector points with SQLite chunks")
+    status.add_argument("--profile", default=None, help="index profile ID")
+    status.add_argument("--repair", action="store_true", help="repair missing/orphan points")
+    status.add_argument("--json", action="store_true")
 
     serve = sub.add_parser("serve", help="run the FastAPI app with uvicorn")
     serve.add_argument("--host", default="127.0.0.1")
@@ -79,6 +121,13 @@ def _profile_from_args(settings: Settings, args: argparse.Namespace) -> IndexPro
             else settings.default_overlap_tokens
         ),
     )
+    if getattr(args, "embed", False):
+        return settings.dense_profile(
+            name=args.name or f"dense-{chunker.strategy}-{chunker.max_tokens}",
+            chunker=chunker,
+            embedding_model=args.embedding_model,
+            embedding_dimension=args.embedding_dimension,
+        )
     name = args.name or f"{chunker.strategy}-{chunker.max_tokens}"
     return IndexProfileSpec(name=name, chunker=chunker)
 
@@ -92,7 +141,10 @@ def _cmd_ingest(settings: Settings, database: Database, args: argparse.Namespace
     if args.json:
         print(result.model_dump_json(indent=2))
     else:
-        status = "duplicate (already indexed)" if result.is_duplicate else "ingested"
+        if result.is_duplicate:
+            status = "duplicate (already indexed)"
+        else:
+            status = "ingested" if result.state == "completed" else result.state
         print(f"{status}: {result.source_name}")
         print(f"  document_id : {result.document_id}")
         print(f"  profile_id  : {result.profile_id}")
@@ -107,7 +159,12 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
     service = SearchService(database, settings)
     query = " ".join(args.query)
     response = service.search(
-        query=query, profile_id=args.profile, top_k=args.top_k, collection=args.collection
+        query=query,
+        profile_id=args.profile,
+        mode=args.mode,
+        top_k=args.top_k,
+        collection=args.collection,
+        candidates=args.candidates,
     )
     if args.json:
         print(response.model_dump_json(indent=2))
@@ -116,7 +173,7 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
     print(
         f"query={response.query!r} mode={response.mode} profile={response.profile_id} "
         f"({response.profile_name}) hits={len(response.hits)} "
-        f"retrieval_ms={response.timings_ms.get('retrieval')}"
+        f"total_ms={response.total_ms} timings_ms={response.timings_ms}"
     )
     if not response.hits:
         print("  no hits")
@@ -129,7 +186,10 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
         if hit.section_path:
             where += f" | {hit.section_path}"
         excerpt = " ".join(hit.text.split())
-        print(f"  #{hit.rank} score={hit.score:.4f} {where}")
+        components = ""
+        if hit.bm25_rank is not None or hit.dense_rank is not None:
+            components = f" [bm25_rank={hit.bm25_rank} dense_rank={hit.dense_rank}]"
+        print(f"  #{hit.rank} {hit.score_kind}={hit.score:.4f} {where}{components}")
         print(f"     {excerpt[:200]}")
     return 0
 
@@ -162,10 +222,56 @@ def _cmd_profiles(settings: Settings, database: Database, args: argparse.Namespa
         return 0
     print(f"{len(profiles)} profile(s)")
     for profile in profiles:
+        dense = (
+            f"model={profile.embedding_model} dim={profile.embedding_dimension}"
+            if profile.embedding_model
+            else "lexical"
+        )
         print(
             f"  {profile.profile_id}  {profile.name}  "
             f"strategy={profile.chunker_strategy} params={profile.chunker_params} "
-            f"chunks={profile.chunk_count}"
+            f"{dense} chunks={profile.chunk_count}"
+        )
+    return 0
+
+
+def _cmd_rebuild_vectors(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    indexer = VectorIndexer(database, settings)
+    targets = [args.profile] if args.profile else indexer.dense_profile_ids()
+    if not targets:
+        print("no dense profiles to rebuild", file=sys.stderr)
+        return 0
+    results = [indexer.rebuild_profile(pid, drop=not args.keep) for pid in targets]
+    if args.json:
+        print(json.dumps([r.model_dump(mode="json") for r in results], indent=2))
+        return 0
+    for result in results:
+        print(
+            f"rebuilt {result.profile_id} -> {result.collection}: "
+            f"chunks={result.chunks} points={result.points_written} "
+            f"duration_ms={result.duration_ms}"
+        )
+        for note in result.diagnostics:
+            print(f"  note: {note}")
+    return 0
+
+
+def _cmd_vectors_status(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    indexer = VectorIndexer(database, settings)
+    targets = [args.profile] if args.profile else indexer.dense_profile_ids()
+    if not targets:
+        print("no dense profiles", file=sys.stderr)
+        return 0
+    statuses = [indexer.reconcile_profile(pid, repair=args.repair) for pid in targets]
+    if args.json:
+        print(json.dumps([s.model_dump(mode="json") for s in statuses], indent=2))
+        return 0
+    for status in statuses:
+        flag = "in-sync" if status.in_sync else "OUT-OF-SYNC"
+        print(
+            f"  {status.profile_id}  {status.collection}  [{flag}] "
+            f"chunks={status.chunk_count} points={status.point_count} "
+            f"missing={status.missing_points} orphans={status.orphan_points}"
         )
     return 0
 
@@ -208,11 +314,17 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_documents(settings, database, args)
         if args.command == "profiles":
             return _cmd_profiles(settings, database, args)
+        if args.command == "rebuild-vectors":
+            return _cmd_rebuild_vectors(settings, database, args)
+        if args.command == "vectors-status":
+            return _cmd_vectors_status(settings, database, args)
         parser.error(f"unknown command: {args.command}")
         return 2
     except RagWorkbenchError as exc:
         print(f"error [{exc.code}]: {exc.message}", file=sys.stderr)
         return 1
+    finally:
+        close_vector_stores()
 
 
 if __name__ == "__main__":  # pragma: no cover

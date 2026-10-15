@@ -15,6 +15,8 @@ from rag_workbench.domain.schemas import (
     IngestionResult,
     ProfileRecord,
     SearchResponse,
+    VectorIndexStatus,
+    VectorRebuildResult,
 )
 
 
@@ -34,6 +36,26 @@ class SearchRequest(BaseModel):
     mode: str = "bm25"
     top_k: int = Field(default=5, ge=1, le=50)
     collection: str | None = None
+    candidates: int | None = Field(default=None, ge=1, le=500)
+
+
+class VectorRebuildRequest(BaseModel):
+    profile_id: str | None = None
+    all_profiles: bool = False
+    drop: bool = True
+
+
+class VectorReconcileRequest(BaseModel):
+    profile_id: str
+    repair: bool = False
+
+
+class VectorRebuildResponse(BaseModel):
+    results: list[VectorRebuildResult]
+
+
+class VectorStatusResponse(BaseModel):
+    statuses: list[VectorIndexStatus]
 
 
 class DocumentListResponse(BaseModel):
@@ -79,4 +101,8 @@ __all__ = [
     "ProfileListResponse",
     "SearchRequest",
     "SearchResponse",
+    "VectorRebuildRequest",
+    "VectorRebuildResponse",
+    "VectorReconcileRequest",
+    "VectorStatusResponse",
 ]

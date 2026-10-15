@@ -13,7 +13,11 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 DocumentStatus = Literal["indexed", "empty", "failed"]
-JobState = Literal["queued", "running", "completed", "failed", "duplicate"]
+JobState = Literal["queued", "running", "completed", "partial", "failed", "duplicate"]
+
+#: How to read a hit's ``score``. BM25 over FTS5 is ascending (smaller is
+#: better); cosine similarity and RRF are descending (larger is better).
+ScoreKind = Literal["bm25", "cosine", "rrf"]
 
 
 class ParsedBlock(BaseModel):
@@ -61,13 +65,45 @@ class ChunkData(BaseModel):
     char_end: int | None = None
 
 
+class EmbeddingBatch(BaseModel):
+    """Result of embedding a batch of texts, with truncation diagnostics."""
+
+    vectors: list[list[float]]
+    dimension: int
+    diagnostics: list[str] = Field(default_factory=list)
+    truncated_count: int = 0
+    max_tokens_seen: int | None = None
+
+
+class VectorPoint(BaseModel):
+    """A vector ready to be upserted, keyed by its stable chunk ID."""
+
+    id: str
+    vector: list[float]
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class VectorMatch(BaseModel):
+    """A raw vector-store search result before provenance resolution."""
+
+    id: str
+    score: float
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
 class SearchHit(BaseModel):
     """A single retrieval result with provenance and a normalized rank.
 
     ``rank`` is 1-based and always means "1 is best", independent of the
-    underlying scoring direction. ``score`` is the raw backend score; for BM25
-    over FTS5 a *smaller* (more negative) score is better, and the retriever
-    sorts ascending accordingly.
+    underlying scoring direction. ``score`` is the score of the selected mode and
+    ``score_kind`` documents how to read it:
+
+    * ``bm25``  — FTS5 score, *smaller* (more negative) is better.
+    * ``cosine`` — semantic similarity, *larger* is better.
+    * ``rrf``   — Reciprocal Rank Fusion score, *larger* is better.
+
+    For hybrid results the original component ranks/scores are preserved in the
+    ``bm25_*`` and ``dense_*`` fields so rank movements can be inspected.
     """
 
     rank: int
@@ -78,9 +114,15 @@ class SearchHit(BaseModel):
     chunk_order: int
     text: str
     score: float
+    score_kind: ScoreKind = "bm25"
     section_path: str | None = None
     page_start: int | None = None
     page_end: int | None = None
+    bm25_rank: int | None = None
+    bm25_score: float | None = None
+    dense_rank: int | None = None
+    dense_score: float | None = None
+    fused_score: float | None = None
 
 
 class IngestionResult(BaseModel):
@@ -116,8 +158,36 @@ class SearchResponse(BaseModel):
     config_hash: str
     collection: str | None = None
     top_k: int
+    candidates: int | None = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
+    total_ms: float | None = None
     hits: list[SearchHit] = Field(default_factory=list)
+
+
+class VectorIndexStatus(BaseModel):
+    """Reconciliation view of one profile's vector index versus SQLite."""
+
+    profile_id: str
+    collection: str
+    embedding_model: str | None = None
+    dimension: int | None = None
+    chunk_count: int
+    point_count: int
+    missing_points: int
+    orphan_points: int
+    in_sync: bool
+
+
+class VectorRebuildResult(BaseModel):
+    """Outcome of rebuilding (or repairing) one profile's vector index."""
+
+    profile_id: str
+    collection: str
+    chunks: int
+    points_written: int
+    orphan_points_deleted: int = 0
+    duration_ms: float
+    diagnostics: list[str] = Field(default_factory=list)
 
 
 class DocumentRecord(BaseModel):
@@ -144,6 +214,10 @@ class ProfileRecord(BaseModel):
     chunker_params: dict[str, object]
     embedding_model: str | None = None
     embedding_dimension: int | None = None
+    embedding_revision: str | None = None
+    similarity_metric: str = "cosine"
+    normalize_embeddings: bool = True
+    vector_collection: str | None = None
     index_version: str
     created_at: datetime
     chunk_count: int

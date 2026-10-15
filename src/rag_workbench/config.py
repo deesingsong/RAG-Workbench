@@ -28,6 +28,16 @@ DEFAULT_PARSER_VERSION = "1.0.0"
 INDEX_VERSION = "1"
 
 ChunkStrategy = Literal["fixed_token", "paragraph"]
+SimilarityMetric = Literal["cosine"]
+
+#: Known embedding dimensions for models whose dimension should not be guessed.
+#: Supplying a dimension explicitly always wins; this table only fills the gap for
+#: the default model.
+DEFAULT_EMBEDDING_DIMENSIONS: dict[str, int] = {
+    "sentence-transformers/all-MiniLM-L6-v2": 384,
+}
+
+DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class ChunkerConfig(BaseModel):
@@ -56,6 +66,14 @@ class IndexProfileSpec(BaseModel):
 
     ``name`` is a human label and is deliberately excluded from the derived key,
     so that renaming a profile does not silently create a new index.
+
+    A profile is either *lexical-only* (``embedding_model is None``) or *dense*
+    (an embedding model is configured). Only dense profiles carry the extra
+    embedding identity fields. :meth:`canonical` therefore adds those fields
+    **conditionally**, which keeps the derived key of every Phase 1 lexical
+    profile byte-for-byte identical to the Phase 1 value — existing BM25 indexes
+    and their profile rows stay valid — while ensuring that any change to a
+    behaviour-affecting embedding setting produces a different key.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -65,18 +83,49 @@ class IndexProfileSpec(BaseModel):
     chunker: ChunkerConfig = Field(default_factory=ChunkerConfig)
     embedding_model: str | None = None
     embedding_dimension: int | None = None
+    embedding_revision: str | None = None
+    similarity_metric: SimilarityMetric = "cosine"
+    normalize_embeddings: bool = True
+    embedding_document_prefix: str = ""
+    embedding_query_prefix: str = ""
     index_version: str = INDEX_VERSION
+
+    @model_validator(mode="after")
+    def _validate_dense(self) -> IndexProfileSpec:
+        if self.embedding_model is not None and self.embedding_dimension is None:
+            raise ValueError(
+                "dense profiles require embedding_dimension "
+                "(use resolve_embedding_dimension to derive it for known models)"
+            )
+        if self.embedding_model is None and self.embedding_dimension is not None:
+            raise ValueError("embedding_dimension was set without an embedding_model")
+        return self
+
+    @property
+    def is_dense(self) -> bool:
+        """Whether this profile stores dense vectors."""
+
+        return self.embedding_model is not None
 
     def canonical(self) -> dict[str, object]:
         """Return the behaviour-affecting fields in a stable, JSON-safe form."""
 
-        return {
+        payload: dict[str, object] = {
             "parser_version": self.parser_version,
             "chunker": self.chunker.model_dump(),
             "embedding_model": self.embedding_model,
             "embedding_dimension": self.embedding_dimension,
             "index_version": self.index_version,
         }
+        if self.is_dense:
+            # These only affect behaviour when vectors exist, so they are added
+            # only for dense profiles rather than invalidating lexical ones.
+            payload["embedding_revision"] = self.embedding_revision
+            payload["similarity_metric"] = self.similarity_metric
+            payload["normalize_embeddings"] = self.normalize_embeddings
+            payload["embedding_document_prefix"] = self.embedding_document_prefix
+            payload["embedding_query_prefix"] = self.embedding_query_prefix
+        return payload
 
     @property
     def key(self) -> str:
@@ -92,6 +141,16 @@ class IndexProfileSpec(BaseModel):
 
         payload = json.dumps(self.canonical(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @property
+    def vector_collection(self) -> str:
+        """Deterministic vector-collection name for this profile.
+
+        Derived purely from the profile key, so an immutable configuration maps
+        to exactly one collection and incompatible configurations never share.
+        """
+
+        return f"rw_{self.key}"
 
 
 class Settings(BaseSettings):
@@ -115,6 +174,18 @@ class Settings(BaseSettings):
     default_max_tokens: int = Field(default=220, ge=1, le=4096)
     default_overlap_tokens: int = Field(default=40, ge=0, le=4096)
 
+    # Dense retrieval. These defaults are only used when a dense profile is
+    # created explicitly (CLI `--embed` / API `embed=true`); nothing downloads a
+    # model or opens the vector store at startup.
+    embedding_model: str = DEFAULT_EMBEDDING_MODEL
+    embedding_revision: str | None = None
+    embedding_dimension: int | None = None
+    embedding_batch_size: int = Field(default=32, ge=1, le=512)
+    embedding_normalize: bool = True
+    vector_dir_name: str = "qdrant"
+    dense_candidate_k: int = Field(default=50, ge=1, le=1000)
+    rrf_k: int = Field(default=60, ge=1, le=10000)
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
@@ -126,8 +197,14 @@ class Settings(BaseSettings):
         db_path = (self.data_dir / "rag_workbench.db").resolve()
         return f"sqlite:///{db_path.as_posix()}"
 
+    @property
+    def vector_store_path(self) -> Path:
+        """Persistent Qdrant local-mode storage directory."""
+
+        return (self.data_dir / self.vector_dir_name).resolve()
+
     def default_profile(self) -> IndexProfileSpec:
-        """Build the configured default index profile."""
+        """Build the configured default *lexical* index profile."""
 
         chunker = ChunkerConfig(
             strategy=self.default_chunk_strategy,
@@ -136,8 +213,55 @@ class Settings(BaseSettings):
         )
         return IndexProfileSpec(name=f"{chunker.strategy}-{chunker.max_tokens}", chunker=chunker)
 
+    def dense_profile(
+        self,
+        *,
+        name: str | None = None,
+        chunker: ChunkerConfig | None = None,
+        embedding_model: str | None = None,
+        embedding_dimension: int | None = None,
+        embedding_revision: str | None = None,
+    ) -> IndexProfileSpec:
+        """Build a dense index profile from the configured defaults."""
+
+        chunker = chunker or ChunkerConfig(
+            strategy=self.default_chunk_strategy,
+            max_tokens=self.default_max_tokens,
+            overlap_tokens=self.default_overlap_tokens,
+        )
+        model = embedding_model or self.embedding_model
+        dimension = resolve_embedding_dimension(
+            model,
+            embedding_dimension if embedding_dimension is not None else self.embedding_dimension,
+        )
+        return IndexProfileSpec(
+            name=name or f"dense-{chunker.strategy}-{chunker.max_tokens}",
+            chunker=chunker,
+            embedding_model=model,
+            embedding_dimension=dimension,
+            embedding_revision=(
+                embedding_revision if embedding_revision is not None else self.embedding_revision
+            ),
+            normalize_embeddings=self.embedding_normalize,
+        )
+
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+
+def resolve_embedding_dimension(model_id: str, explicit: int | None) -> int:
+    """Return a concrete embedding dimension, refusing to guess unknown models."""
+
+    if explicit is not None:
+        return explicit
+    if model_id in DEFAULT_EMBEDDING_DIMENSIONS:
+        return DEFAULT_EMBEDDING_DIMENSIONS[model_id]
+    known = ", ".join(sorted(DEFAULT_EMBEDDING_DIMENSIONS))
+    raise ValueError(
+        f"unknown embedding dimension for '{model_id}'; pass an explicit "
+        f"embedding_dimension. Known models: {known}"
+    )
+
 
 
 @lru_cache(maxsize=1)

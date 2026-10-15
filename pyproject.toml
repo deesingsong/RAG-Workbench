@@ -1,7 +1,7 @@
 [project]
 name = "rag-workbench"
 version = "0.1.0"
-description = "Local-first RAG retrieval engineering laboratory (Phase 0-1: ingestion + BM25 baseline)."
+description = "Local-first RAG retrieval engineering laboratory (ingestion, BM25, dense and hybrid retrieval)."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -16,6 +16,14 @@ dependencies = [
     "pymupdf>=1.24",
     "python-multipart>=0.0.9",
     "streamlit>=1.37",
+    "qdrant-client>=1.9",
+]
+
+# Dense retrieval extra. Optional so BM25 and the core test suite install and run
+# without pulling a deep-learning stack or any model weights.
+[project.optional-dependencies]
+dense = [
+    "sentence-transformers>=2.7",
 ]
 
 [dependency-groups]
@@ -50,5 +58,8 @@ select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not dense'"
+markers = [
+    "dense: needs the optional 'dense' extra and downloads a Sentence Transformers model; run with: uv run pytest -m dense",
+]
 filterwarnings = ["ignore::DeprecationWarning"]

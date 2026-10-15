@@ -1,20 +1,29 @@
 """Explicit component interfaces.
 
 These are :class:`typing.Protocol` definitions used where more than one concrete
-implementation exists or is planned. Phase 1 ships concrete plain-text/Markdown/
-PDF parsers, fixed-token and paragraph chunkers, and a BM25 sparse retriever; the
-dense/hybrid/reranker interfaces arrive with their implementations in later
-phases rather than as empty placeholders.
+implementation exists or is planned. Phase 2 ships plain-text/Markdown/PDF
+parsers, fixed-token and paragraph chunkers, a BM25 sparse retriever, a local
+Qdrant vector store and a Sentence Transformers embedding provider; the fake
+embedding provider used in tests implements the same ``EmbeddingProvider``
+protocol, which is the seam that keeps tests offline.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from sqlalchemy.orm import Session
 
 from rag_workbench.config import ChunkerConfig
-from rag_workbench.domain.schemas import ChunkData, ParsedDocument, SearchHit
+from rag_workbench.domain.schemas import (
+    ChunkData,
+    EmbeddingBatch,
+    ParsedDocument,
+    SearchHit,
+    VectorMatch,
+    VectorPoint,
+)
 
 
 @runtime_checkable
@@ -53,4 +62,67 @@ class SparseRetriever(Protocol):
     ) -> list[SearchHit]: ...
 
 
-__all__ = ["Chunker", "DocumentParser", "SparseRetriever"]
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    """Turn text into vectors with explicit, inspectable model identity.
+
+    ``dimension``, ``model_id``, ``revision``, ``normalize`` and ``max_tokens``
+    describe exactly what produced a vector. Implementations may be lazy: the
+    model is not loaded until the first embedding call.
+    """
+
+    @property
+    def model_id(self) -> str: ...
+
+    @property
+    def revision(self) -> str | None: ...
+
+    @property
+    def dimension(self) -> int: ...
+
+    @property
+    def normalize(self) -> bool: ...
+
+    @property
+    def max_tokens(self) -> int | None: ...
+
+    def embed_documents(self, texts: Sequence[str]) -> EmbeddingBatch: ...
+
+    def embed_query(self, text: str) -> list[float]: ...
+
+
+@runtime_checkable
+class VectorStore(Protocol):
+    """Persistent vector storage scoped by named collection.
+
+    Only the state needed for retrieval lives here; SQLite remains authoritative
+    for documents, chunk text and provenance.
+    """
+
+    def ensure_collection(self, name: str, *, dimension: int, metric: str = "cosine") -> None: ...
+
+    def has_collection(self, name: str) -> bool: ...
+
+    def collection_dimension(self, name: str) -> int | None: ...
+
+    def upsert(self, name: str, points: Sequence[VectorPoint]) -> int: ...
+
+    def search(
+        self,
+        name: str,
+        vector: Sequence[float],
+        *,
+        limit: int,
+        collection: str | None = None,
+    ) -> list[VectorMatch]: ...
+
+    def delete_ids(self, name: str, ids: Sequence[str]) -> int: ...
+
+    def list_ids(self, name: str) -> set[str]: ...
+
+    def count(self, name: str) -> int: ...
+
+    def drop(self, name: str) -> None: ...
+
+
+__all__ = ["Chunker", "DocumentParser", "EmbeddingProvider", "SparseRetriever", "VectorStore"]

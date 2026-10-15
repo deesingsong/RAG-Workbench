@@ -15,9 +15,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from rag_workbench import __version__
-from rag_workbench.api.routes import documents, health, search
+from rag_workbench.api.routes import documents, health, search, vectors
 from rag_workbench.config import Settings, get_settings
 from rag_workbench.domain.errors import (
+    DenseUnavailableError,
+    DimensionMismatchError,
     FileTooLargeError,
     IngestionError,
     NotFoundError,
@@ -26,10 +28,13 @@ from rag_workbench.domain.errors import (
     SearchError,
     UnsupportedFileTypeError,
     ValidationError,
+    VectorStoreError,
 )
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
+from rag_workbench.persistence.vector_store import close_vector_stores
 from rag_workbench.retrieval.service import SearchService
 
 logger = logging.getLogger(__name__)
@@ -42,6 +47,9 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     IngestionError: 400,
     SearchError: 400,
     NotFoundError: 404,
+    DimensionMismatchError: 422,
+    DenseUnavailableError: 503,
+    VectorStoreError: 503,
 }
 
 
@@ -65,11 +73,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=__version__,
-        summary="Local-first RAG retrieval engineering laboratory (Phase 0-1).",
+        summary="Local-first RAG retrieval engineering laboratory (BM25, dense, hybrid).",
     )
     app.state.settings = settings
     app.state.database = database
-    app.state.ingestion_service = IngestionService(database, settings)
+    vector_indexer = VectorIndexer(database, settings)
+    app.state.vector_indexer = vector_indexer
+    app.state.ingestion_service = IngestionService(
+        database, settings, vector_indexer=vector_indexer
+    )
     app.state.search_service = SearchService(database, settings)
 
     @app.exception_handler(RagWorkbenchError)
@@ -82,10 +94,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.on_event("shutdown")
     def _shutdown() -> None:
         database.dispose()
+        close_vector_stores()
 
     app.include_router(health.router)
     app.include_router(documents.router, prefix="/v1")
     app.include_router(search.router, prefix="/v1")
+    app.include_router(vectors.router, prefix="/v1")
     return app
 
 

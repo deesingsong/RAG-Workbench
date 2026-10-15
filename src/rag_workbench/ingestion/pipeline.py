@@ -6,6 +6,13 @@ and records an :class:`IngestionJob`. Re-ingesting the same bytes into the same
 profile is idempotent and reported as a duplicate; the same bytes under a
 different profile produce a separate, isolated set of chunks.
 
+For a *dense* profile the same call also embeds and upserts each chunk into the
+profile's vector collection. Vector indexing runs **after** the chunk write
+transaction commits and outside it, so a long embedding job never holds the
+single SQLite writer lock. If embedding or the vector store fails, the chunks stay
+durable and the job is recorded as ``partial`` (BM25-searchable) rather than
+silently pretending the document is fully indexed; ``rebuild-vectors`` repairs it.
+
 The service is single-writer by design (one SQLite writer); concurrent ingestion
 is a documented non-goal for the prototype.
 """
@@ -36,6 +43,7 @@ from rag_workbench.domain.schemas import (
 )
 from rag_workbench.ingestion.chunkers import get_chunker
 from rag_workbench.ingestion.parsers import get_parser, mime_type_for
+from rag_workbench.ingestion.vector_index import VectorChunk, VectorIndexer
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.models import Chunk, Document, IndexProfile, IngestionJob, utcnow
 
@@ -53,9 +61,22 @@ def make_document_id(collection: str, checksum: str) -> str:
 class IngestionService:
     """Parse, chunk and persist documents; answer catalog read queries."""
 
-    def __init__(self, database: Database, settings: Settings) -> None:
+    def __init__(
+        self,
+        database: Database,
+        settings: Settings,
+        *,
+        vector_indexer: VectorIndexer | None = None,
+    ) -> None:
         self._db = database
         self._settings = settings
+        self._vector_indexer = vector_indexer
+
+    @property
+    def _indexer(self) -> VectorIndexer:
+        if self._vector_indexer is None:
+            self._vector_indexer = VectorIndexer(self._db, self._settings)
+        return self._vector_indexer
 
     # ------------------------------------------------------------------ ingest
 
@@ -183,51 +204,93 @@ class IngestionService:
                 session.flush()
                 index_ms = (time.perf_counter() - index_started) * 1000.0
 
-                duration_ms = (time.perf_counter() - started) * 1000.0
+                # Snapshot the inputs needed for embedding; the ORM rows expire
+                # when this session closes.
+                vector_chunks = (
+                    [
+                        VectorChunk(
+                            chunk_id=chunk.chunk_id,
+                            text=chunk.text,
+                            document_id=document_id,
+                            collection=collection,
+                        )
+                        for chunk in chunk_data
+                    ]
+                    if profile.is_dense
+                    else []
+                )
+
+            # Chunks are now durable. Index vectors outside the write transaction.
+            vector_index_ms: float | None = None
+            vector_error: tuple[str, str] | None = None
+            vector_diagnostics: list[str] = []
+            if profile.is_dense and vector_chunks:
+                vector_started = time.perf_counter()
+                try:
+                    report = self._indexer.index_chunks(profile.key, vector_chunks)
+                    vector_index_ms = (time.perf_counter() - vector_started) * 1000.0
+                    vector_diagnostics = list(report.diagnostics)
+                except RagWorkbenchError as exc:
+                    vector_error = (exc.code, exc.message)
+                except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+                    vector_error = ("vector_indexing_failed", str(exc))
+
+            duration_ms = (time.perf_counter() - started) * 1000.0
+            timings = {
+                "parse": round(parse_ms, 3),
+                "chunk": round(chunk_ms, 3),
+                "index": round(index_ms, 3),
+            }
+            if vector_index_ms is not None:
+                timings["vector_index"] = round(vector_index_ms, 3)
+            timings["total"] = round(duration_ms, 3)
+
+            diagnostics = list(parsed.diagnostics) + vector_diagnostics
+            state = "completed"
+            if vector_error is not None:
+                state = "partial"
+                diagnostics.append(
+                    f"vector indexing failed [{vector_error[0]}]: {vector_error[1]}. "
+                    "Chunks are searchable via BM25; run `rag-workbench rebuild-vectors` "
+                    "to complete the dense index."
+                )
+
+            with self._db.session() as session:
                 job = session.get(IngestionJob, job_id)
                 assert job is not None
                 job.document_id = document_id
-                job.state = "completed"
+                job.state = state
                 job.progress = 1.0
                 job.chunk_count = len(chunk_data)
                 job.finished_at = utcnow()
                 job.duration_ms = duration_ms
-                job.diagnostics = list(parsed.diagnostics)
-                job.timings_ms = {
-                    "parse": round(parse_ms, 3),
-                    "chunk": round(chunk_ms, 3),
-                    "index": round(index_ms, 3),
-                    "total": round(duration_ms, 3),
-                }
+                job.diagnostics = diagnostics
+                job.timings_ms = timings
 
-                logger.info(
-                    "document ingested",
-                    extra={
-                        "document_id": document_id,
-                        "profile_id": profile.key,
-                        "collection": collection,
-                        "chunk_count": len(chunk_data),
-                        "duration_ms": round(duration_ms, 3),
-                    },
-                )
-                return IngestionResult(
-                    job_id=job_id,
-                    document_id=document_id,
-                    profile_id=profile.key,
-                    state="completed",
-                    is_duplicate=False,
-                    chunk_count=len(chunk_data),
-                    source_name=source_name,
-                    checksum=checksum,
-                    collection=collection,
-                    diagnostics=list(parsed.diagnostics),
-                    timings_ms={
-                        "parse": round(parse_ms, 3),
-                        "chunk": round(chunk_ms, 3),
-                        "index": round(index_ms, 3),
-                        "total": round(duration_ms, 3),
-                    },
-                )
+            logger.info(
+                "document ingested",
+                extra={
+                    "document_id": document_id,
+                    "profile_id": profile.key,
+                    "collection": collection,
+                    "chunk_count": len(chunk_data),
+                    "state": state,
+                    "duration_ms": round(duration_ms, 3),
+                },
+            )
+            return IngestionResult(
+                job_id=job_id,
+                document_id=document_id,
+                profile_id=profile.key,
+                state=state,
+                is_duplicate=False,
+                chunk_count=len(chunk_data),
+                source_name=source_name,
+                checksum=checksum,
+                collection=collection,
+                diagnostics=diagnostics,
+                timings_ms=timings,
+            )
         except RagWorkbenchError as exc:
             self._mark_failed(job_id, exc.code, exc.message, started)
             raise
@@ -249,6 +312,18 @@ class IngestionService:
             if profile_id is not None:
                 query = query.filter(Chunk.profile_id == profile_id)
 
+            # Remember which (profile, chunk) pairs to remove from the vector index
+            # before the rows disappear.
+            removed = session.execute(
+                select(Chunk.profile_id, Chunk.chunk_id).where(
+                    Chunk.document_id == document_id,
+                    *([Chunk.profile_id == profile_id] if profile_id is not None else []),
+                )
+            ).all()
+            by_profile: dict[str, list[str]] = {}
+            for row_profile_id, chunk_id in removed:
+                by_profile.setdefault(row_profile_id, []).append(chunk_id)
+
             chunks_deleted = query.count()
             query.delete(synchronize_session=False)
             session.flush()
@@ -267,21 +342,33 @@ class IngestionService:
                 session.delete(document)
                 document_deleted = True
 
-            logger.info(
-                "document deletion",
-                extra={
-                    "document_id": document_id,
-                    "profile_id": profile_id,
-                    "chunks_deleted": chunks_deleted,
-                    "document_deleted": document_deleted,
-                },
-            )
-            return DocumentDeleteResult(
-                document_id=document_id,
-                profile_id=profile_id,
-                chunks_deleted=chunks_deleted,
-                document_deleted=document_deleted,
-            )
+        # Propagate deletion to any dense profile's vector index. A failure here
+        # leaves an orphan point, which `reconcile` detects and repairs; it must
+        # not fail the relational deletion that already committed.
+        for removed_profile_id, chunk_ids in by_profile.items():
+            try:
+                self._indexer.delete_points(removed_profile_id, chunk_ids)
+            except Exception:  # noqa: BLE001 - best effort, reconcilable
+                logger.warning(
+                    "could not remove vector points for deleted chunks",
+                    extra={"profile_id": removed_profile_id, "document_id": document_id},
+                )
+
+        logger.info(
+            "document deletion",
+            extra={
+                "document_id": document_id,
+                "profile_id": profile_id,
+                "chunks_deleted": chunks_deleted,
+                "document_deleted": document_deleted,
+            },
+        )
+        return DocumentDeleteResult(
+            document_id=document_id,
+            profile_id=profile_id,
+            chunks_deleted=chunks_deleted,
+            document_deleted=document_deleted,
+        )
 
     # ----------------------------------------------------------------- catalog
 
@@ -347,6 +434,13 @@ class IngestionService:
             chunker_params=profile.chunker.model_dump(),
             embedding_model=profile.embedding_model,
             embedding_dimension=profile.embedding_dimension,
+            embedding_params={
+                "revision": profile.embedding_revision,
+                "metric": profile.similarity_metric,
+                "normalize": profile.normalize_embeddings,
+                "document_prefix": profile.embedding_document_prefix,
+                "query_prefix": profile.embedding_query_prefix,
+            },
             index_version=profile.index_version,
         )
         session.add(row)
@@ -418,6 +512,8 @@ class IngestionService:
             .scalar()
             or 0
         )
+        params = dict(profile.embedding_params or {})
+        is_dense = profile.embedding_model is not None
         return ProfileRecord(
             profile_id=profile.id,
             name=profile.name,
@@ -427,6 +523,10 @@ class IngestionService:
             chunker_params=dict(profile.chunker_params or {}),
             embedding_model=profile.embedding_model,
             embedding_dimension=profile.embedding_dimension,
+            embedding_revision=params.get("revision"),
+            similarity_metric=params.get("metric", "cosine"),
+            normalize_embeddings=params.get("normalize", True),
+            vector_collection=f"rw_{profile.id}" if is_dense else None,
             index_version=profile.index_version,
             created_at=profile.created_at,
             chunk_count=chunk_count,

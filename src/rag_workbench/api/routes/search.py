@@ -1,4 +1,4 @@
-"""Search endpoint (Phase 1: BM25 only)."""
+"""Search endpoint (BM25, dense and hybrid modes)."""
 
 from __future__ import annotations
 
@@ -22,4 +22,5 @@ def search(
         mode=request.mode,
         top_k=request.top_k,
         collection=request.collection,
+        candidates=request.candidates,
     )
