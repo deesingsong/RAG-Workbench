@@ -147,6 +147,35 @@ Example hybrid output (component ranks preserved):
 uv run rag-workbench ingest "C:\path\to\contract.pdf" --collection contracts --embed
 ```
 
+### Deploying to Streamlit Community Cloud
+
+The repo is set up to run as a **single Streamlit app** there, because Community
+Cloud runs one Streamlit process and cannot run a separate FastAPI process:
+
+- When `RAG_WORKBENCH_API_URL` is unset, `ui/local_backend.py` starts the *same*
+  FastAPI app with uvicorn on `127.0.0.1:8765` inside the Streamlit process; the
+  UI talks to it over HTTP. No retrieval logic moves into the UI.
+- On an empty (ephemeral) instance the first load ingests the bundled sample
+  contract so there is something to search immediately; set
+  `RAG_WORKBENCH_AUTOSEED=0` to disable.
+
+To deploy:
+
+1. Push to the repo's `main` branch. Streamlit Cloud **auto-redeploys on every
+   push**, so each completed phase appears in the live app.
+2. On <https://share.streamlit.io> → *New app* → repository
+   `deesingsong/RAG-Workbench`, branch `main`, **Main file path
+   `ui/streamlit_app.py`**.
+3. Set the Python version to **3.12**. Dependencies come from
+   `uv.lock` / `pyproject.toml` (Community Cloud supports uv). The optional
+   `dense` extra is **not** installed, so the live demo runs on BM25 and
+   dense/hybrid return a clear `503` until a dense profile is built.
+
+Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
+store reset when the app sleeps or reboots (hence the auto-seed) — and the
+deep-learning dense stack is heavy for the free tier, so BM25-only is the
+default live demo.
+
 ---
 
 ## 5. Configuration
@@ -174,6 +203,9 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_DENSE_CANDIDATE_K` | `50` | Candidate pool for dense/hybrid. |
 | `RAG_WORKBENCH_RRF_K` | `60` | Reciprocal Rank Fusion constant. |
 | `RAG_WORKBENCH_API_URL` | `http://127.0.0.1:8000` | API base URL used by the Streamlit UI. |
+| `RAG_WORKBENCH_INPROC_HOST` | `127.0.0.1` | Host for the in-process API on a single-process host. |
+| `RAG_WORKBENCH_INPROC_PORT` | `8765` | Port for the in-process API (used when `RAG_WORKBENCH_API_URL` is unset). |
+| `RAG_WORKBENCH_AUTOSEED` | `1` | Seed the bundled sample contract when the index is empty (`0` disables). |
 
 ---
 
@@ -406,6 +438,7 @@ src/rag_workbench/
   retrieval/           BM25, dense, hybrid (RRF), retrieval service
   api/                 FastAPI factory, dependencies, routes
 ui/streamlit_app.py    Thin HTTP client
+ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
 tests/                 unit + integration tests, tiny redistributable fixtures
 .github/workflows/ci.yml
 ```

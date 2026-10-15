@@ -7,12 +7,14 @@ system works.
 
 from __future__ import annotations
 
-import os
-
 import httpx
 import streamlit as st
 
-API_URL = os.environ.get("RAG_WORKBENCH_API_URL", "http://127.0.0.1:8000")
+from local_backend import resolve_api_url, seed_sample_if_empty
+
+# Replaced at startup by resolve_api_url(). The default is the separately-run
+# local API; a single-process host starts the API in-process instead.
+API_URL = "http://127.0.0.1:8000"
 TIMEOUT = 60.0
 
 st.set_page_config(page_title="RAG Workbench", page_icon="🔎", layout="wide")
@@ -270,8 +272,14 @@ PAGES = {
 
 
 def main() -> None:
+    global API_URL
+    API_URL = resolve_api_url()
+    seed_note = seed_sample_if_empty(API_URL)
+
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption("BM25 • dense (Sentence Transformers) • hybrid RRF")
+    if seed_note:
+        st.sidebar.caption(seed_note)
     page = st.sidebar.radio("Navigate", list(PAGES.keys()))
     st.title("Retrieval Laboratory")
     PAGES[page]()
