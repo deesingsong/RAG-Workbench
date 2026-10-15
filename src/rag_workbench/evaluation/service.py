@@ -28,7 +28,6 @@ from rag_workbench.evaluation.datasets import (
 )
 from rag_workbench.evaluation.experiments import (
     ExperimentStore,
-    find_recorded,
     load_recorded,
     load_recorded_summary,
 )
@@ -74,6 +73,20 @@ class EvaluationService:
         self._experiments = ExperimentStore(database)
         self._recorded_dir = Path(settings.recorded_experiments_dir)
         self._git_root = git_root
+        # Committed artifacts are large (multi-megabyte JSON) and, in a read-only
+        # deployment, immutable for the life of the process; parse them once.
+        self._recorded_cache: list[dict] | None = None
+
+    def _recorded(self) -> list[dict]:
+        if self._recorded_cache is None:
+            self._recorded_cache = load_recorded(self._recorded_dir)
+        return self._recorded_cache
+
+    def _find_recorded(self, experiment_id: str) -> dict | None:
+        for record in self._recorded():
+            if record.get("experiment_id") == experiment_id:
+                return record
+        return None
 
     # ----------------------------------------------------------------- datasets
 
@@ -232,7 +245,7 @@ class EvaluationService:
         summaries = self._experiments.list_experiments(dataset=dataset)
         seen = {item["experiment_id"] for item in summaries}
         if include_recorded:
-            for record in load_recorded(self._recorded_dir):
+            for record in self._recorded():
                 if dataset is not None and record.get("dataset", {}).get("name") != dataset:
                     continue
                 # A locally-run experiment that was also committed as an artifact
@@ -248,7 +261,7 @@ class EvaluationService:
             return self._experiments.get(experiment_id)
         except ExperimentNotFoundError:
             if include_recorded:
-                recorded = find_recorded(self._recorded_dir, experiment_id)
+                recorded = self._find_recorded(experiment_id)
                 if recorded is not None:
                     return recorded
             raise
@@ -257,7 +270,7 @@ class EvaluationService:
         try:
             return self._experiments.get_query(experiment_id, query_id)
         except ExperimentNotFoundError:
-            recorded = find_recorded(self._recorded_dir, experiment_id)
+            recorded = self._find_recorded(experiment_id)
             if recorded is not None:
                 for query in recorded.get("per_query", []):
                     if query.get("query_id") == query_id:

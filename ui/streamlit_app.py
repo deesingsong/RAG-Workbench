@@ -9,10 +9,28 @@ system/corpus views.
 
 from __future__ import annotations
 
+import importlib
+
 import httpx
 import streamlit as st
 
-from local_backend import resolve_api_url, seed_sample_if_empty, server_is_read_only
+# Import the helper module as a whole rather than ``from local_backend import
+# name``. Streamlit re-executes this *main* script when a file changes but keeps
+# already-imported modules in ``sys.modules``; on a mid-deploy hot reload the
+# running process can therefore still hold an older ``local_backend``. Binding
+# through the module object (and resolving ``server_is_read_only`` with
+# ``getattr``) means a stale module degrades the read-only probe instead of
+# crashing the whole app. A full redeploy/restart loads the current version.
+_backend = importlib.import_module("local_backend")
+resolve_api_url = _backend.resolve_api_url
+seed_sample_if_empty = _backend.seed_sample_if_empty
+
+
+def server_is_read_only(api_url: str) -> bool:
+    """Probe the deployment's read-only flag, tolerating a stale module."""
+
+    probe = getattr(_backend, "server_is_read_only", None)
+    return bool(probe(api_url)) if probe is not None else False
 
 # Replaced at startup by resolve_api_url(). The default is the separately-run
 # local API; a single-process host starts the API in-process instead.
