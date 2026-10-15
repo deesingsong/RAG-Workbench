@@ -199,6 +199,11 @@ class AppConfigResponse(BaseModel):
     default_candidate_depth: int
     recorded_experiments: int
     datasets: int
+    repo_root: str = ""
+    bundled_datasets_dir: str = ""
+    bundled_datasets_exists: bool = False
+    recorded_experiments_dir: str = ""
+    recorded_experiments_exists: bool = False
 
 
 __all__ = [

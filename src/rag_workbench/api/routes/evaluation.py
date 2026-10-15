@@ -23,7 +23,7 @@ from rag_workbench.api.schemas import (
     DatasetSummary,
     EvaluationRunRequest,
 )
-from rag_workbench.config import Settings
+from rag_workbench.config import Settings, find_repo_root
 from rag_workbench.domain.errors import ValidationError
 from rag_workbench.evaluation.runner import EvalRunConfig
 from rag_workbench.evaluation.service import EvaluationService
@@ -193,4 +193,12 @@ def app_config(
         "default_candidate_depth": settings.default_candidate_depth,
         "recorded_experiments": len(service.list_experiments(include_recorded=True)),
         "datasets": len(service.list_datasets()),
+        # Deployment diagnostics: the resolved asset locations. These are paths,
+        # not secrets, and make it obvious when a deployment cannot see the
+        # committed datasets/experiments (e.g. a wrong repository root).
+        "repo_root": str(find_repo_root()),
+        "bundled_datasets_dir": str(settings.bundled_datasets_dir),
+        "bundled_datasets_exists": settings.bundled_datasets_dir.is_dir(),
+        "recorded_experiments_dir": str(settings.recorded_experiments_dir),
+        "recorded_experiments_exists": settings.recorded_experiments_dir.is_dir(),
     }

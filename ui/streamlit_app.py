@@ -701,12 +701,32 @@ def _render_experiment_detail(record: dict) -> None:
     _download_buttons(record["experiment_id"])
 
 
+def _render_deployment_diagnostics() -> None:
+    """Show the resolved asset locations so a misconfigured deploy is obvious."""
+
+    status, cfg = api_get("/v1/config")
+    if status != 200 or not isinstance(cfg, dict):
+        return
+    with st.expander("Deployment diagnostics (read-only)"):
+        st.caption(
+            f"repo_root {cfg.get('repo_root')} • read_only {cfg.get('read_only')} • "
+            f"dense_available {cfg.get('dense_available')}"
+        )
+        st.caption(
+            f"datasets {cfg.get('bundled_datasets_dir')} "
+            f"(exists={cfg.get('bundled_datasets_exists')}) • "
+            f"recorded {cfg.get('recorded_experiments_dir')} "
+            f"(exists={cfg.get('recorded_experiments_exists')})"
+        )
+
+
 def render_evaluation_lab() -> None:
     st.header("Evaluation Lab")
     st.caption(
         "Run a stored dataset through a real retrieval configuration and record the "
         "metrics. Everything here is measured in this project; nothing is simulated."
     )
+    _render_deployment_diagnostics()
     if READ_ONLY:
         st.info(
             "Read-only deployment: new runs are disabled. Recorded benchmark "
