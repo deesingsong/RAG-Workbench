@@ -26,4 +26,5 @@ def search(
         rerank=request.rerank,
         reranker_model=request.reranker_model,
         rerank_candidates=request.rerank_candidates,
+        query_mode=request.query_mode,
     )

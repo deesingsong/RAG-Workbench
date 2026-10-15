@@ -35,9 +35,10 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=2000)
     profile_id: str | None = None
     mode: str = "bm25"
-    top_k: int = Field(default=5, ge=1, le=50)
+    top_k: int = Field(default=5, ge=1, le=100)
     collection: str | None = None
     candidates: int | None = Field(default=None, ge=1, le=500)
+    query_mode: str = "and"
     rerank: bool = False
     reranker_model: str | None = Field(default=None, max_length=200)
     rerank_candidates: int | None = Field(default=None, ge=1, le=500)
@@ -103,10 +104,115 @@ class ErrorResponse(BaseModel):
     message: str
 
 
+class DatasetSummary(BaseModel):
+    name: str
+    slug: str
+    version: str
+    source: str
+    license: str
+    description: str = ""
+    relevance_mapping: str
+    corpus_count: int
+    query_count: int
+    qrel_count: int
+    evidence_count: int
+    checksum: str
+    created_at: str
+    notes: list[str] = []
+    directory: str | None = None
+
+
+class DatasetListResponse(BaseModel):
+    datasets: list[DatasetSummary]
+
+
+class CorpusIngestRequest(BaseModel):
+    dataset: str
+    collection: str | None = None
+    strategy: str | None = None
+    max_tokens: int | None = Field(default=None, ge=8, le=4096)
+    overlap_tokens: int | None = Field(default=None, ge=0, le=2048)
+    profile_name: str | None = None
+    embed: bool = False
+    embedding_model: str | None = None
+    embedding_dimension: int | None = Field(default=None, ge=8, le=8192)
+    limit: int | None = Field(default=None, ge=1)
+
+
+class CorpusIngestResponse(BaseModel):
+    dataset: str
+    collection: str
+    profile_id: str
+    documents: int
+    new_documents: int
+    duplicates: int
+    chunks: int
+    diagnostics: list[str] = []
+
+
+class EvaluationRunRequest(BaseModel):
+    dataset: str
+    profile_id: str
+    collection: str | None = None
+    mode: str = "bm25"
+    query_mode: str = "or"
+    candidate_depth: int = Field(default=100, ge=1, le=500)
+    top_k: int = Field(default=10, ge=1, le=100)
+    k_values: list[int] = Field(default_factory=lambda: [1, 3, 5, 10])
+    rerank: bool = False
+    rerank_candidates: int | None = Field(default=None, ge=1, le=500)
+    reranker_model: str | None = None
+    candidates: int | None = Field(default=None, ge=1, le=500)
+    max_queries: int | None = Field(default=None, ge=1)
+    label: str | None = None
+    subset: bool = False
+    related_baseline: str | None = None
+
+
+class ExperimentSummary(BaseModel):
+    experiment_id: str
+    source: str
+    created_at: str | None = None
+    dataset: str | None = None
+    mode: str | None = None
+    label: str | None = None
+    rerank: bool | None = None
+    subset: bool | None = None
+    aggregate: dict[str, float] = {}
+    candidate_metrics: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    latency: dict = {}
+
+
+class ExperimentListResponse(BaseModel):
+    experiments: list[dict]
+
+
+class AppConfigResponse(BaseModel):
+    read_only: bool
+    app_name: str
+    version: str
+    dense_available: bool
+    reranking_available: bool
+    supported_modes: list[str]
+    default_k_values: list[int]
+    default_candidate_depth: int
+    recorded_experiments: int
+    datasets: int
+
+
 __all__ = [
+    "AppConfigResponse",
     "ChunkListResponse",
+    "CorpusIngestRequest",
+    "CorpusIngestResponse",
+    "DatasetListResponse",
+    "DatasetSummary",
     "DocumentListResponse",
     "ErrorResponse",
+    "EvaluationRunRequest",
+    "ExperimentListResponse",
+    "ExperimentSummary",
     "HealthResponse",
     "IngestionJobResponse",
     "IngestionResult",

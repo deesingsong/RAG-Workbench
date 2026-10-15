@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from rag_workbench.api.deps import get_vector_indexer
+from rag_workbench.api.deps import get_vector_indexer, require_writable
 from rag_workbench.api.schemas import (
     VectorRebuildRequest,
     VectorRebuildResponse,
@@ -30,7 +30,12 @@ def _target_profiles(
     )
 
 
-@router.post("/vectors/rebuild", response_model=VectorRebuildResponse, tags=["vectors"])
+@router.post(
+    "/vectors/rebuild",
+    response_model=VectorRebuildResponse,
+    tags=["vectors"],
+    dependencies=[Depends(require_writable)],
+)
 def rebuild_vectors(
     request: VectorRebuildRequest,
     indexer: VectorIndexer = Depends(get_vector_indexer),
@@ -42,7 +47,12 @@ def rebuild_vectors(
     return VectorRebuildResponse(results=results)
 
 
-@router.post("/vectors/reconcile", response_model=VectorIndexStatus, tags=["vectors"])
+@router.post(
+    "/vectors/reconcile",
+    response_model=VectorIndexStatus,
+    tags=["vectors"],
+    dependencies=[Depends(require_writable)],
+)
 def reconcile_vectors(
     request: VectorReconcileRequest,
     indexer: VectorIndexer = Depends(get_vector_indexer),

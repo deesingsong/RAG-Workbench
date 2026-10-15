@@ -36,3 +36,17 @@ def test_punctuation_only_query_is_rejected():
 def test_empty_query_is_rejected():
     with pytest.raises(ValidationError):
         build_match_query("   ")
+
+
+def test_or_mode_joins_quoted_phrases_with_or():
+    assert build_match_query("latent vectors", mode="or") == '"latent" OR "vectors"'
+
+
+def test_or_mode_keeps_literal_or_token_quoted():
+    # A user-supplied "OR" stays a quoted literal, never an FTS5 operator.
+    assert build_match_query("cats OR dogs", mode="or") == '"cats" OR "OR" OR "dogs"'
+
+
+def test_unknown_query_mode_is_rejected():
+    with pytest.raises(ValidationError, match="query_mode"):
+        build_match_query("valid terms", mode="xor")

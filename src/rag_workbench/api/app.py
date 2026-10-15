@@ -15,16 +15,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from rag_workbench import __version__
-from rag_workbench.api.routes import documents, health, search, vectors
+from rag_workbench.api.routes import documents, evaluation, health, search, vectors
 from rag_workbench.config import Settings, get_settings
 from rag_workbench.domain.errors import (
+    DatasetError,
     DenseUnavailableError,
     DimensionMismatchError,
+    EvaluationError,
     FileTooLargeError,
     IngestionError,
     NotFoundError,
     ParsingError,
     RagWorkbenchError,
+    ReadOnlyModeError,
     RerankError,
     RerankerUnavailableError,
     SearchError,
@@ -32,7 +35,9 @@ from rag_workbench.domain.errors import (
     ValidationError,
     VectorStoreError,
 )
+from rag_workbench.evaluation.service import EvaluationService
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.sample import seed_bundled_sample
 from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
@@ -54,6 +59,9 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     VectorStoreError: 503,
     RerankerUnavailableError: 503,
     RerankError: 400,
+    DatasetError: 400,
+    EvaluationError: 400,
+    ReadOnlyModeError: 403,
 }
 
 
@@ -87,6 +95,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         database, settings, vector_indexer=vector_indexer
     )
     app.state.search_service = SearchService(database, settings)
+    app.state.evaluation_service = EvaluationService(
+        database, settings, app.state.ingestion_service, app.state.search_service
+    )
 
     @app.exception_handler(RagWorkbenchError)
     async def _handle_workbench_error(_request: Request, exc: RagWorkbenchError) -> JSONResponse:
@@ -94,6 +105,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             status_code=_status_for(exc),
             content={"error": exc.code, "message": exc.message},
         )
+
+    @app.on_event("startup")
+    def _bootstrap() -> None:
+        # Trusted internal bootstrap: the public demo is read-only, so the sample
+        # corpus is seeded here rather than through a public mutation endpoint.
+        if settings.autoseed_sample:
+            try:
+                seeded = seed_bundled_sample(app.state.ingestion_service)
+            except RagWorkbenchError as exc:  # pragma: no cover - best effort bootstrap
+                logger.warning("sample bootstrap failed: %s", exc.message)
+            else:
+                if seeded:
+                    logger.info("seeded demonstration corpus: %s", ", ".join(seeded))
 
     @app.on_event("shutdown")
     def _shutdown() -> None:
@@ -104,6 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(documents.router, prefix="/v1")
     app.include_router(search.router, prefix="/v1")
     app.include_router(vectors.router, prefix="/v1")
+    app.include_router(evaluation.router, prefix="/v1")
     return app
 
 

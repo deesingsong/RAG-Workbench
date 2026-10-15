@@ -1,8 +1,10 @@
 """Streamlit "Retrieval Laboratory" — a thin HTTP client of the FastAPI backend.
 
-This module performs no retrieval or ingestion logic itself: every action is an
-HTTP request to the API, so the UI and the API can never disagree about how the
-system works.
+This module performs no retrieval, ingestion or evaluation logic itself: every
+action is an HTTP request to the API, so the UI and the API can never disagree
+about how the system works. Pages: search and mode comparison, the Chunking,
+Reranking, Evaluation and Performance Laboratories, a Failure Explorer and the
+system/corpus views.
 """
 
 from __future__ import annotations
@@ -10,11 +12,12 @@ from __future__ import annotations
 import httpx
 import streamlit as st
 
-from local_backend import resolve_api_url, seed_sample_if_empty
+from local_backend import resolve_api_url, seed_sample_if_empty, server_is_read_only
 
 # Replaced at startup by resolve_api_url(). The default is the separately-run
 # local API; a single-process host starts the API in-process instead.
 API_URL = "http://127.0.0.1:8000"
+READ_ONLY = False
 TIMEOUT = 60.0
 
 st.set_page_config(page_title="RAG Workbench", page_icon="🔎", layout="wide")
@@ -42,6 +45,14 @@ def api_delete(path: str, **params) -> tuple[int, object]:
         return response.status_code, _decode(response)
     except httpx.HTTPError as exc:
         return 0, {"error": "connection_error", "message": str(exc)}
+
+
+def api_text(path: str, **params) -> tuple[int, str]:
+    try:
+        response = httpx.get(f"{API_URL}{path}", params=params, timeout=TIMEOUT)
+        return response.status_code, response.text
+    except httpx.HTTPError as exc:
+        return 0, str(exc)
 
 
 def _decode(response: httpx.Response) -> object:
@@ -186,10 +197,15 @@ def render_search() -> None:
 
     labels = {f"{p['profile_id']} • {p['name']}": p["profile_id"] for p in profiles}
     query = st.text_input("Query", value="")
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     selected = col1.selectbox("Profile", list(labels.keys()))
     mode = col2.selectbox("Mode", ["bm25", "dense", "hybrid"])
-    top_k = col3.slider("Top K", min_value=1, max_value=20, value=5)
+    query_mode = col3.selectbox(
+        "Query mode",
+        ["and", "or"],
+        help="Lexical term combination: 'and' needs every term; 'or' matches any term.",
+    )
+    top_k = col4.slider("Top K", min_value=1, max_value=20, value=5)
 
     if st.button("Search") and query.strip():
         payload = {
@@ -197,6 +213,7 @@ def render_search() -> None:
             "profile_id": labels[selected],
             "top_k": int(top_k),
             "mode": mode,
+            "query_mode": query_mode,
         }
         status, body = api_post("/v1/search", json=payload)
         if status != 200:
@@ -205,6 +222,7 @@ def render_search() -> None:
         assert isinstance(body, dict)
         st.caption(
             f"{len(body.get('hits', []))} hit(s) • mode {body.get('mode')} "
+            f"• query_mode {body.get('query_mode')} "
             f"• profile {body.get('profile_id')} • config {body.get('config_hash', '')[:12]} "
             f"• total {body.get('total_ms')} ms • {body.get('timings_ms')}"
         )
@@ -404,19 +422,23 @@ def render_reranking_lab() -> None:
         return
 
     profile_id = labels[selected]
-    base_payload = {
+    # One first-stage pool, shared by both views: the baseline requests the full
+    # candidate pool (not just top-K), and the reranker reorders that same pool.
+    # Neither view can then show a passage the other never had.
+    pool_payload = {
         "query": query,
         "profile_id": profile_id,
         "mode": mode,
-        "top_k": int(top_k),
+        "top_k": int(candidate_k),
+        "candidates": int(candidate_k),
     }
-    status, baseline = _post_search(base_payload)
+    status, baseline = _post_search(pool_payload)
     if status != 200 or not isinstance(baseline, dict):
         st.error(f"Retrieval failed ({status}): {baseline}")
         return
 
     rerank_payload = {
-        **base_payload,
+        **pool_payload,
         "rerank": True,
         "rerank_candidates": int(candidate_k),
     }
@@ -430,6 +452,11 @@ def render_reranking_lab() -> None:
         return
 
     info = reranked.get("reranker") or {}
+    st.info(
+        f"Both views reorder the **same {candidate_k}-passage first-stage pool**; the "
+        f"reranked view displays the full pool reordered, with the top-{top_k} cut "
+        "marked. A passage absent from the pool cannot be recovered by reranking."
+    )
     st.caption(
         f"model {info.get('model_id')} • candidates {reranked.get('rerank_candidates')} "
         f"• init {reranked.get('timings_ms', {}).get('rerank_init')} ms "
@@ -439,21 +466,429 @@ def render_reranking_lab() -> None:
     for note in info.get("diagnostics", []) or []:
         st.warning(note)
 
+    base_ids = {hit["chunk_id"] for hit in baseline.get("hits", [])}
+    rerank_ids = {hit["chunk_id"] for hit in reranked.get("hits", [])}
+    only_base = base_ids - rerank_ids
+    only_rerank = rerank_ids - base_ids
+    if only_base or only_rerank:
+        st.warning(
+            f"Pool mismatch: {len(only_base)} passage(s) only in first-stage, "
+            f"{len(only_rerank)} only after rerank. They should start from the same pool."
+        )
+
     left_col, right_col = st.columns(2)
     with left_col:
-        st.subheader("First-stage retrieval")
+        st.subheader(f"First-stage ranking (pool of {len(baseline.get('hits', []))})")
         st.caption(f"total {baseline.get('total_ms')} ms • {baseline.get('timings_ms')}")
         _render_rank_table(baseline.get("hits", []))
     with right_col:
-        st.subheader("After cross-encoder rerank")
+        st.subheader("After cross-encoder rerank (same pool)")
         st.caption(f"total {reranked.get('total_ms')} ms • {reranked.get('timings_ms')}")
         _render_rank_table(reranked.get("hits", []))
 
+    top_set = {hit["chunk_id"] for hit in reranked.get("hits", [])[: int(top_k)]}
     moved = [hit for hit in reranked.get("hits", []) if hit.get("rank_movement")]
-    if moved:
-        st.info(f"{len(moved)} passage(s) changed rank after reranking.")
+    st.info(
+        f"{len(moved)} passage(s) changed rank; {len(top_set)} inside the top-{top_k} cut."
+    )
+
+
+def _fetch_experiments(dataset: str | None = None) -> list[dict]:
+    params = {"include_recorded": "true"}
+    if dataset:
+        params["dataset"] = dataset
+    status, body = api_get("/v1/experiments", **params)
+    if status == 200 and isinstance(body, dict):
+        return body.get("experiments", [])
+    return []
+
+
+def _fetch_datasets() -> list[dict]:
+    status, body = api_get("/v1/datasets")
+    if status == 200 and isinstance(body, dict):
+        return body.get("datasets", [])
+    return []
+
+
+def _experiment_label(experiment: dict) -> str:
+    dataset = experiment.get("dataset") or "?"
+    mode = experiment.get("mode") or "?"
+    qmode = experiment.get("query_mode") or "?"
+    profile = (experiment.get("profile_id") or "")[:12]
+    rerank = "+rerank" if experiment.get("rerank") else ""
+    label = experiment.get("label") or ""
+    source = experiment.get("source") or "?"
+    prefix = f"{experiment['experiment_id']}"
+    tail = f"{dataset} {mode}/{qmode}{rerank} {profile}"
+    if label:
+        tail += f" — {label}"
+    return f"{prefix} [{source}] {tail}"
+
+
+def _download_buttons(experiment_id: str) -> None:
+    left, right = st.columns(2)
+    status, json_text = api_text(f"/v1/experiments/{experiment_id}/export", format="json")
+    if status == 200:
+        left.download_button(
+            "Download JSON",
+            data=json_text,
+            file_name=f"{experiment_id}.json",
+            mime="application/json",
+            key=f"dl-json-{experiment_id}",
+        )
+    status, csv_text = api_text(f"/v1/experiments/{experiment_id}/export", format="csv")
+    if status == 200:
+        right.download_button(
+            "Download CSV",
+            data=csv_text,
+            file_name=f"{experiment_id}.csv",
+            mime="text/csv",
+            key=f"dl-csv-{experiment_id}",
+        )
+
+
+def _metric_table(values: dict, *, key: str) -> None:
+    if not values:
+        st.caption("No metrics recorded.")
+        return
+    st.dataframe(
+        [{"metric": name, "value": round(float(value), 4)} for name, value in sorted(values.items())],
+        use_container_width=True,
+        key=key,
+    )
+
+
+def _render_dataset_browser() -> None:
+    datasets = _fetch_datasets()
+    st.subheader("Datasets")
+    if not datasets:
+        st.caption("No datasets available. Import one with:  rag-workbench datasets import …")
+        return
+    st.dataframe(
+        [
+            {
+                "slug": d.get("slug"),
+                "name": d.get("name"),
+                "version": d.get("version"),
+                "mapping": d.get("relevance_mapping"),
+                "docs": d.get("corpus_count"),
+                "queries": d.get("query_count"),
+                "qrels": d.get("qrel_count"),
+                "source": d.get("source"),
+                "license": d.get("license"),
+            }
+            for d in datasets
+        ],
+        use_container_width=True,
+        key="evaluation-datasets",
+    )
+
+
+def _render_run_form() -> None:
+    st.subheader("Run an evaluation")
+    datasets = _fetch_datasets()
+    profiles = _profile_options()
+    if not datasets:
+        st.caption("Import a dataset first.")
+        return
+    if not profiles:
+        st.caption("No index profiles yet — ingest a document or a dataset corpus first.")
+        return
+
+    dataset_labels = {
+        f"{d['slug']} ({d['corpus_count']} docs, {d['query_count']} queries)": d["slug"]
+        for d in datasets
+    }
+    profile_labels = _profile_labels(profiles)
+
+    col1, col2, col3 = st.columns(3)
+    dataset = col1.selectbox("Dataset", list(dataset_labels.keys()), key="eval-dataset")
+    profile = col2.selectbox("Profile", list(profile_labels.keys()), key="eval-profile")
+    mode = col3.selectbox("Mode", ["bm25", "dense", "hybrid"], key="eval-mode")
+    col4, col5, col6 = st.columns(3)
+    query_mode = col4.selectbox("Query mode", ["or", "and"], key="eval-query-mode")
+    top_k = col5.slider("Top K", 1, 50, 10, key="eval-topk")
+    candidate_depth = col6.slider("Candidate depth", 10, 200, 100, key="eval-depth")
+    rerank = st.checkbox(
+        "Rerank candidates with a cross-encoder", value=False, key="eval-rerank"
+    )
+    rerank_candidates = st.slider(
+        "Rerank candidates", 1, 200, 20, key="eval-rerank-candidates"
+    )
+    label = st.text_input("Label (optional)", value="", key="eval-label")
+    subset = st.checkbox("Quick subset (limit queries)", value=False, key="eval-subset")
+
+    if READ_ONLY:
+        st.info("This deployment is read-only; running new evaluations is disabled.")
+        return
+    if not st.button("Run evaluation", key="eval-run"):
+        return
+
+    payload = {
+        "dataset": dataset_labels[dataset],
+        "profile_id": profile_labels[profile],
+        "mode": mode,
+        "query_mode": query_mode,
+        "candidate_depth": int(candidate_depth),
+        "top_k": int(top_k),
+        "k_values": sorted({1, 3, 5, 10, int(top_k)}),
+        "rerank": bool(rerank),
+        "subset": bool(subset),
+    }
+    if subset:
+        payload["max_queries"] = 20
+    if rerank:
+        payload["rerank_candidates"] = int(rerank_candidates)
+    if label.strip():
+        payload["label"] = label.strip()
+
+    with st.spinner("Running evaluation over the dataset …"):
+        status, body = api_post("/v1/evaluations", json=payload)
+    if status != 200 or not isinstance(body, dict):
+        st.error(f"Evaluation failed ({status}): {body}")
+        if status == 503:
+            st.info("Dense/rerank require the optional extra:  uv sync --extra dense")
+        return
+    st.success(f"Recorded experiment {body.get('experiment_id')}")
+    _render_experiment_detail(body)
+
+
+def _render_experiment_detail(record: dict) -> None:
+    config = record.get("config", {})
+    counts = record.get("counts", {})
+    st.caption(
+        f"dataset {record.get('dataset', {}).get('name')} "
+        f"v{record.get('dataset', {}).get('version')} • "
+        f"mode {config.get('mode')}/{config.get('query_mode')} • "
+        f"profile {config.get('profile_id')} • rerank {config.get('rerank')} • "
+        f"depth {config.get('candidate_depth')} • top_k {config.get('top_k')}"
+    )
+    st.markdown("**Counts**")
+    st.dataframe(
+        [{"key": k, "value": v} for k, v in counts.items()],
+        use_container_width=True,
+        key=f"counts-{record.get('experiment_id')}",
+    )
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Ranking metrics**")
+        _metric_table(record.get("aggregate", {}), key=f"agg-{record.get('experiment_id')}")
+    with right:
+        st.markdown("**Candidate-pool metrics**")
+        _metric_table(
+            record.get("candidate_metrics", {}), key=f"cand-{record.get('experiment_id')}"
+        )
+    for note in record.get("notes", []):
+        st.info(note)
+    _download_buttons(record["experiment_id"])
+
+
+def render_evaluation_lab() -> None:
+    st.header("Evaluation Lab")
+    st.caption(
+        "Run a stored dataset through a real retrieval configuration and record the "
+        "metrics. Everything here is measured in this project; nothing is simulated."
+    )
+    if READ_ONLY:
+        st.info(
+            "Read-only deployment: new runs are disabled. Recorded benchmark "
+            "experiments committed to the repository are shown below."
+        )
+    _render_dataset_browser()
+    st.divider()
+    _render_run_form()
+    st.divider()
+    st.subheader("Recorded experiments")
+    experiments = _fetch_experiments()
+    if not experiments:
+        st.caption("No experiments recorded yet.")
+        return
+    st.dataframe(
+        [
+            {
+                "experiment_id": e.get("experiment_id"),
+                "source": e.get("source"),
+                "dataset": e.get("dataset"),
+                "mode": e.get("mode"),
+                "query_mode": e.get("query_mode"),
+                "profile": e.get("profile_id"),
+                "rerank": e.get("rerank"),
+                "label": e.get("label"),
+                "recall@10": (e.get("aggregate", {}) or {}).get("recall@10"),
+                "ndcg@10": (e.get("aggregate", {}) or {}).get("ndcg@10"),
+                "mrr@10": (e.get("aggregate", {}) or {}).get("mrr@10"),
+                "candidate_recall@100": (e.get("candidate_metrics", {}) or {}).get(
+                    "candidate_recall@100"
+                ),
+            }
+            for e in experiments
+        ],
+        use_container_width=True,
+        key="evaluation-experiments",
+    )
+    labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
+    selected = st.selectbox("Inspect experiment", list(labels.keys()), key="eval-inspect")
+    if st.button("Load experiment", key="eval-load"):
+        status, body = api_get(f"/v1/experiments/{labels[selected]}")
+        if status == 200 and isinstance(body, dict):
+            _render_experiment_detail(body)
+        else:
+            st.error(f"Could not load experiment ({status}): {body}")
+
+
+def render_failure_explorer() -> None:
+    st.header("Failure Explorer")
+    st.caption(
+        "Diagnoses are derived only from observable evidence — the query's "
+        "judgments, the retrieved candidates and the final ranking. An unresolved "
+        "case is reported as unresolved, never guessed."
+    )
+    experiments = _fetch_experiments()
+    if not experiments:
+        st.warning("No experiments recorded yet.")
+        return
+    labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
+    selected = st.selectbox("Experiment", list(labels.keys()), key="failure-experiment")
+    if not st.button("Load failures", key="failure-load"):
+        return
+
+    status, record = api_get(f"/v1/experiments/{labels[selected]}")
+    if status != 200 or not isinstance(record, dict):
+        st.error(f"Could not load experiment ({status}): {record}")
+        return
+
+    per_query = record.get("per_query", [])
+    counts: dict[str, int] = {}
+    failing = []
+    for query in per_query:
+        codes = [d["code"] for d in query.get("diagnostics", [])]
+        real_codes = [c for c in codes if c != "unresolved"]
+        if real_codes:
+            failing.append((query, real_codes))
+        for code in codes:
+            counts[code] = counts.get(code, 0) + 1
+
+    st.markdown("**Diagnosis frequency** (queries per code)")
+    if counts:
+        st.bar_chart(counts, key="failure-codes")
     else:
-        st.info("No rank changes for these candidates.")
+        st.caption("No diagnostics recorded for this experiment.")
+
+    st.caption(
+        f"{len(failing)} of {len(per_query)} queries carry an observable failure "
+        f"signal."
+    )
+    code_filter = st.multiselect(
+        "Filter by diagnosis", sorted({c for _, codes in failing for c in codes}),
+        key="failure-filter",
+    )
+    limit = st.slider("Max queries to show", 5, 100, 25, key="failure-limit")
+
+    shown = 0
+    for query, codes in failing:
+        if code_filter and not set(codes) & set(code_filter):
+            continue
+        if shown >= limit:
+            break
+        shown += 1
+        metrics = query.get("metrics") or {}
+        recall10 = metrics.get("recall@10")
+        header = (
+            f"{query['query_id']} • relevant={query['num_relevant']} • "
+            f"recall@10={recall10 if recall10 is None else round(recall10, 3)} • "
+            f"candidates={query.get('candidate_count')}"
+        )
+        with st.expander(header):
+            st.write(query.get("query", ""))
+            for diag in query.get("diagnostics", []):
+                st.warning(f"**{diag['code']}** — {diag['detail']}")
+            st.markdown("**Ranked results**")
+            for item in query.get("trace", [])[:10]:
+                flag = "✅ relevant" if item.get("relevant") else "—"
+                where = item.get("section_number") or item.get("section_path") or ""
+                st.caption(
+                    f"#{item['rank']} {flag} • key={item.get('key')} • "
+                    f"{item.get('source_name')} {where} • "
+                    f"{item.get('score_kind')}={round(float(item.get('score', 0.0)), 3)}"
+                )
+                excerpt = " ".join((item.get("excerpt") or "").split())[:200]
+                if excerpt:
+                    st.write(excerpt)
+
+
+def render_performance_lab() -> None:
+    st.header("Performance Lab")
+    st.caption(
+        "Latency percentiles are measured over the queries in one experiment; "
+        "candidate recall (pool coverage) is reported separately from ranking "
+        "recall (top-K coverage)."
+    )
+    experiments = _fetch_experiments()
+    if not experiments:
+        st.warning("No experiments recorded yet.")
+        return
+    labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
+    selected = st.selectbox("Experiment", list(labels.keys()), key="perf-experiment")
+    if not st.button("Load performance", key="perf-load"):
+        return
+    status, record = api_get(f"/v1/experiments/{labels[selected]}")
+    if status != 200 or not isinstance(record, dict):
+        st.error(f"Could not load experiment ({status}): {record}")
+        return
+
+    latency = record.get("latency", {})
+    rows = []
+    for stage, stats in latency.items():
+        if isinstance(stats, dict):
+            rows.append({"stage": stage, **stats})
+        else:
+            rows.append({"stage": stage, "value": stats})
+    st.markdown("**Latency (ms)**")
+    st.dataframe(rows, use_container_width=True, key="perf-latency")
+
+    candidate = record.get("candidate_metrics", {})
+    aggregate = record.get("aggregate", {})
+    recall_by_stage: dict[str, float] = {}
+    for depth in (10, 20, 50, 100):
+        name = f"candidate_recall@{depth}"
+        if name in candidate:
+            recall_by_stage[f"candidate@{depth}"] = float(candidate[name])
+    for k in (1, 3, 5, 10):
+        name = f"recall@{k}"
+        if name in aggregate:
+            recall_by_stage[f"rank@{k}"] = float(aggregate[name])
+    if recall_by_stage:
+        st.markdown("**Candidate pool vs ranking recall**")
+        st.bar_chart(recall_by_stage, key="perf-recall")
+    st.caption(
+        "candidate@N = share of relevant units present anywhere in the pool of N "
+        "chunks; rank@K = share present in the final top-K. A large gap points at "
+        "ranking; a low candidate@N points at the pool or the index."
+    )
+
+    st.divider()
+    st.subheader("Configuration comparison")
+    st.caption("Pick two or more experiments to compare aggregate metrics side by side.")
+    compare = st.multiselect(
+        "Experiments", list(labels.keys()), key="perf-compare", default=[]
+    )
+    if len(compare) < 2:
+        return
+    records = []
+    for label in compare:
+        status, body = api_get(f"/v1/experiments/{labels[label]}")
+        if status == 200 and isinstance(body, dict):
+            records.append(body)
+    metrics = sorted({m for r in records for m in (r.get("aggregate") or {})})
+    table = []
+    for metric in metrics:
+        row = {"metric": metric}
+        for record in records:
+            row[record["experiment_id"]] = round(
+                float((record.get("aggregate") or {}).get(metric, 0.0)), 4
+            )
+        table.append(row)
+    st.dataframe(table, use_container_width=True, key="perf-compare-table")
 
 
 PAGES = {
@@ -463,19 +898,25 @@ PAGES = {
     "Mode Comparison": render_compare,
     "Chunking Laboratory": render_chunking_lab,
     "Reranking Laboratory": render_reranking_lab,
+    "Evaluation Lab": render_evaluation_lab,
+    "Failure Explorer": render_failure_explorer,
+    "Performance Lab": render_performance_lab,
 }
 
 
 def main() -> None:
-    global API_URL
+    global API_URL, READ_ONLY
     API_URL = resolve_api_url()
-    seed_note = seed_sample_if_empty(API_URL)
+    READ_ONLY = server_is_read_only(API_URL)
+    seed_note = None if READ_ONLY else seed_sample_if_empty(API_URL)
 
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption(
         "BM25 • dense (Sentence Transformers) • hybrid RRF • clause-aware chunking "
-        "• cross-encoder reranking"
+        "• cross-encoder reranking • retrieval evaluation"
     )
+    if READ_ONLY:
+        st.sidebar.info("Read-only demo: ingestion and new evaluation runs are disabled.")
     if seed_note:
         st.sidebar.caption(seed_note)
     page = st.sidebar.radio("Navigate", list(PAGES.keys()))

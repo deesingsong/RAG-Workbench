@@ -54,6 +54,23 @@ for anything documented below.
   the rank movement, with model initialization and inference timed separately.
 - **Idempotent re-ingestion**: the same bytes into the same profile are reported
   as a duplicate; vector points are keyed by the stable chunk ID and overwritten.
+- **Retrieval evaluation** over stored datasets with two relevance-mapping
+  policies: *document-level* (BEIR SciFact) and *evidence/clause-level* (a
+  bundled synthetic legal-contract set). Every run records a reproducible
+  configuration, per-query outcomes and provenance.
+- **Pure-Python IR metrics** (recall, precision, MRR, nDCG, MAP) plus a separate
+  **candidate-pool recall** so pool coverage is never confused with ranking
+  quality. Reranking experiments start from the *same* candidate pool as their
+  baseline.
+- **Rule-based failure diagnostics** derived only from observable evidence
+  (judgments, candidate pool, final ranking), with an explicit `unresolved`
+  fallback rather than a guessed root cause.
+- **Experiment store and export** — JSON and per-query CSV — inspectable through
+  the CLI, the API and the Streamlit **Evaluation Lab**, **Failure Explorer** and
+  **Performance Lab**.
+- **Read-only deployment mode** for the public demo: the backend refuses every
+  mutating endpoint and serves the bundled datasets plus committed experiment
+  artifacts, so the live app shows real recorded results without mutable state.
 - **FastAPI** endpoints with typed Pydantic contracts and OpenAPI docs, a
   **CLI**, and a **Streamlit** client that talks to the API over HTTP only.
 
@@ -147,6 +164,43 @@ uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --r
 uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --rerank --reranker-model cross-encoder/ms-marco-MiniLM-L6-v2
 ```
 
+### Evaluate retrieval from the CLI
+
+```powershell
+# List bundled / imported datasets
+uv run rag-workbench datasets list
+
+# Import a BEIR-format dataset from local files (no network)
+uv run rag-workbench datasets import --name mycorpus `
+  --corpus corpus.jsonl --queries queries.jsonl --qrels qrels.tsv `
+  --source "…" --license "…" --mapping document
+
+# Download the BEIR SciFact benchmark (explicit command; ~2 MB)
+uv run rag-workbench datasets download-scifact
+
+# Ingest a dataset's corpus into an index profile, then evaluate it
+uv run rag-workbench datasets ingest scifact --strategy paragraph          # lexical profile
+uv run rag-workbench datasets ingest scifact --strategy paragraph --embed  # dense profile
+
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --query-mode or --candidate-depth 20 --top-k 10 --k 1,3,5,10 `
+  --label "SciFact BM25"
+
+# Matched reranking: baseline and reranked start from the SAME 20-passage pool
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --candidate-depth 20 --top-k 10 --label "pool20 baseline"
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --candidate-depth 20 --top-k 10 --rerank --rerank-candidates 20 `
+  --label "pool20 + rerank"
+
+# Inspect, diagnose, export, and commit a read-only artifact
+uv run rag-workbench eval list --dataset scifact
+uv run rag-workbench eval show <experiment-id>
+uv run rag-workbench eval failures <experiment-id>
+uv run rag-workbench eval export <experiment-id> --format csv --out run.csv
+uv run rag-workbench eval record <experiment-id> --name scifact-bm25.json
+```
+
 Example dense output (real MiniLM run, see §13):
 
 ```
@@ -185,9 +239,15 @@ Cloud runs one Streamlit process and cannot run a separate FastAPI process:
 - When `RAG_WORKBENCH_API_URL` is unset, `ui/local_backend.py` starts the *same*
   FastAPI app with uvicorn on `127.0.0.1:8765` inside the Streamlit process; the
   UI talks to it over HTTP. No retrieval logic moves into the UI.
-- On an empty (ephemeral) instance the first load ingests the bundled sample
-  contract so there is something to search immediately; set
-  `RAG_WORKBENCH_AUTOSEED=0` to disable.
+- `st.secrets` values named `RAG_WORKBENCH_*` are copied into the environment
+  once, before the in-process API starts, so Cloud configuration needs no shell.
+- The public demo runs in **read-only mode**: set
+  `RAG_WORKBENCH_READ_ONLY=true` and `RAG_WORKBENCH_AUTOSEED_SAMPLE=true`.
+  The backend then refuses every mutating endpoint with `403 read_only_mode`,
+  while a trusted internal startup hook seeds the bundled sample contract so a
+  fresh instance still has something to search. The **Evaluation Lab**,
+  **Failure Explorer** and **Performance Lab** show the committed datasets under
+  `datasets/` and the committed experiment artifacts under `benchmarks/recorded/`.
 
 To deploy:
 
@@ -202,7 +262,15 @@ To deploy:
    (`paragraph` and `clause_aware`) are lexical-only, so the live demo runs on
    BM25: selecting `dense`/`hybrid` returns a clear `422 profile_not_dense` (a
    degenerate dense profile would instead return `503 dense_unavailable`), and
-   the Reranking Laboratory returns a clear `503 reranker_unavailable`.
+   the Reranking Laboratory returns a clear `503 reranker_unavailable`. Because
+   the extra is absent, dense/hybrid/reranked *evaluation runs* are disabled too
+   — the recorded SciFact and legal experiments still display.
+4. Add these **secrets** in the Cloud app settings:
+
+   ```toml
+   RAG_WORKBENCH_READ_ONLY = "true"
+   RAG_WORKBENCH_AUTOSEED_SAMPLE = "true"
+   ```
 
 Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
 store reset when the app sleeps or reboots (hence the auto-seed, which also
@@ -244,7 +312,14 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_API_URL` | `http://127.0.0.1:8000` | API base URL used by the Streamlit UI. |
 | `RAG_WORKBENCH_INPROC_HOST` | `127.0.0.1` | Host for the in-process API on a single-process host. |
 | `RAG_WORKBENCH_INPROC_PORT` | `8765` | Port for the in-process API (used when `RAG_WORKBENCH_API_URL` is unset). |
-| `RAG_WORKBENCH_AUTOSEED` | `1` | Seed the bundled sample contract when the index is empty (`0` disables). |
+| `RAG_WORKBENCH_AUTOSEED` | `1` | UI-side sample seeding when the index is empty (`0` disables). |
+| `RAG_WORKBENCH_DEFAULT_CANDIDATE_DEPTH` | `100` | Default candidate-pool depth for evaluation runs. |
+| `RAG_WORKBENCH_DEFAULT_EVAL_K` | `[1, 3, 5, 10]` | Default rank cut-offs reported by evaluation. |
+| `RAG_WORKBENCH_DATASET_DIR_NAME` | `datasets` | Writable dataset root, relative to `DATA_DIR`. |
+| `RAG_WORKBENCH_BUNDLED_DATASETS_DIR` | `datasets` | Committed, bundled datasets shipped with the repo. |
+| `RAG_WORKBENCH_RECORDED_EXPERIMENTS_DIR` | `benchmarks/recorded` | Committed experiment artifacts shown by a read-only deployment. |
+| `RAG_WORKBENCH_READ_ONLY` | `false` | Refuse every mutating endpoint (`403 read_only_mode`). |
+| `RAG_WORKBENCH_AUTOSEED_SAMPLE` | `false` | Trusted startup bootstrap that seeds the sample corpus once (for a fresh read-only instance). |
 
 ---
 
@@ -375,10 +450,23 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/vectors/status?profile_id=` | Reconcile vector points against SQLite chunks. |
 | `POST` | `/v1/vectors/rebuild` | `{profile_id?}` or `{all_profiles: true}` → rebuild from SQLite. |
 | `POST` | `/v1/vectors/reconcile` | `{profile_id, repair}` → detect and optionally repair drift. |
+| `GET` | `/v1/config` | Deployment capabilities: `read_only`, dense/rerank availability, default eval cut-offs. |
+| `GET` | `/v1/datasets` | List bundled and imported evaluation datasets with counts. |
+| `GET` | `/v1/datasets/{name}` | One dataset's manifest summary. |
+| `POST` | `/v1/datasets/ingest` | `{dataset, strategy?, max_tokens?, embed?, …}` → ingest a corpus into an index profile. |
+| `POST` | `/v1/evaluations` | `{dataset, profile_id, mode, query_mode?, candidate_depth?, top_k, k_values?, rerank?, rerank_candidates?, …}` → run and persist an evaluation. |
+| `GET` | `/v1/experiments?dataset=&include_recorded=` | List live and recorded experiments. |
+| `GET` | `/v1/experiments/{id}` | Full experiment record with per-query outcomes and traces. |
+| `GET` | `/v1/experiments/{id}/queries/{query_id}` | One query's metrics, diagnostics and ranked trace. |
+| `GET` | `/v1/experiments/{id}/export?format=json\|csv` | Download a full JSON record or a per-query CSV. |
 
-`mode` accepts `bm25`, `dense` and `hybrid`. Errors are actionable: `415`
+`mode` accepts `bm25`, `dense` and `hybrid`. `query_mode` accepts `and` (the
+interactive default, every term must appear) and `or` (any term; BM25 ranks,
+which is what natural-language and benchmark queries need). Errors are
+actionable: `415`
 unsupported type, `413` too large, `400` parse or search failure, `404` missing
-document/profile, `422` invalid query/config/unsupported mode, `503` dense or
+document/profile/dataset/experiment, `422` invalid query/config/unsupported mode,
+`403 read_only_mode` for any mutation in a read-only deployment, `503` dense or
 reranker dependencies being unavailable (`dense_unavailable`,
 `vector_index_not_built`, `reranker_unavailable`). Body shape:
 `{"error": "<code>", "message": "<text>"}`.
@@ -386,6 +474,10 @@ reranker dependencies being unavailable (`dense_unavailable`,
 Reranking is optional and off by default. `rerank=true` retrieves
 `rerank_candidates` (default 20) candidates and reorders them, returning the top
 `top_k`; `rerank_candidates` must be `>= top_k` (else `422 invalid_candidates`).
+For a *matched* comparison a baseline and a reranked run must use the **same**
+candidate pool (equal `candidate_depth` / `rerank_candidates`); the runner
+rejects nothing here but reports candidate-pool metrics so a pool that is too
+shallow is visible rather than hidden.
 
 ---
 
@@ -421,6 +513,13 @@ real RRF implementation:
   validation, truncation diagnostics and `reranker_unavailable`; the Phase-1 → 2
   and Phase-2 → 3 additive schema migrations; the full HTTP round-trip with the
   same error mapping.
+- **Evaluation:** hand-computed IR metrics (recall/precision/MRR/nDCG/MAP and
+  candidate-pool recall) against known rankings; the dataset schemas, checksums,
+  BEIR parsing and the two relevance-mapping policies; the bundled synthetic
+  legal dataset's integrity; document-level and evidence-level evaluation
+  end-to-end over real SQLite/BM25; experiment persistence plus JSON/CSV export
+  round-trips; and the evaluation API and read-only enforcement (a mutating
+  endpoint returns `403 read_only_mode`).
 - **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
   profile for the sample contract and returns the expected top clause.
 - **Reranker (opt-in, `-m reranker`):** the real
@@ -512,9 +611,23 @@ notice. Character counts are never used as token counts.
   destructive or type-changing migrations are not yet handled (no Alembic).
 - **Uploads are processed in memory** up to the size limit; there is no
   streaming ingest path yet.
-- **No evaluation metrics or answer generation yet** — those are later phases.
+- **No answer generation yet.** Retrieval, reranking and evaluation are
+  implemented; LLM answer synthesis with citations is a later phase.
   `/v1/search` rejects unknown `mode` values with a clear message rather than
   pretending to support them.
+- **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
+  **stored datasets** with explicit relevance judgments; they are not a
+  leaderboard and the bundled legal set is a small synthetic fixture, not a
+  legal-validity benchmark. SciFact is the only external benchmark imported, and
+  its retrieval depth is a **chunk** count, so a document-level metric at K may
+  need a deeper chunk pool than K (reported separately as candidate-pool recall).
+  Diagnostic categories are rule-based over observable evidence and fall back to
+  `unresolved` rather than inferring a cause; a diagnosis is a navigation aid,
+  not a verified root cause.
+- **BM25 term combination matters.** The interactive default is `and` (every
+  term must appear), which is brittle for long natural-language queries; the
+  evaluation default is `or`. The measured difference is reported in
+  §15 and is a property of this lexical stack, not a universal BM25 result.
 
 ---
 
@@ -531,9 +644,12 @@ src/rag_workbench/
   persistence/         SQLAlchemy models, engine, FTS5 schema, vector store
   ingestion/           parsers, chunkers (incl. clause-aware), pipeline, vector indexer
   retrieval/           BM25, dense, hybrid (RRF), retrieval service (+ rerank stage)
+  evaluation/          metrics, datasets, diagnostics, runner, experiments, service
   api/                 FastAPI factory, dependencies, routes
 ui/streamlit_app.py    Thin HTTP client
 ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
+datasets/              Committed evaluation datasets (bundled legal-contracts)
+benchmarks/recorded/   Committed experiment artifacts for the read-only demo
 tests/                 unit + integration tests, tiny redistributable fixtures
 .github/workflows/ci.yml
 ```
@@ -547,8 +663,12 @@ tests/                 unit + integration tests, tiny redistributable fixtures
 - **Phase 3 (done):** clause-aware legal chunker, local cross-encoder reranking,
   rank-comparison UI (Chunking and Reranking Laboratories), reranker latency
   reporting.
-- **Phase 4:** BEIR SciFact sample + document-level qrels, metrics with unit
-  tests, per-query RAG failure explorer.
+- **Phase 4 (done):** BEIR SciFact import with document-level qrels, a curated
+  synthetic legal set with clause/evidence-level relevance, pure-Python IR
+  metrics, candidate-pool **and** ranking recall, rule-based failure diagnostics,
+  persisted experiments with JSON/CSV export, the Evaluation Lab / Failure
+  Explorer / Performance Lab, a read-only demo mode over committed artifacts, and
+  a corrected matched reranking comparison (§15).
 - **Phase 5:** optional Ollama answer generation with validated, inspectable
   citations and abstention; portfolio polish and the scaling-to-10M design.
 
@@ -596,6 +716,89 @@ are single-machine smoke observations, not a benchmark.
   one-time model download/load) and `rerank_inference` was `130.1 ms` for three
   `(query, passage)` pairs; `lexical` was `0.4 ms`. The API keeps the loaded model
   warm, so later reranked queries pay inference only.
+
+---
+
+## 15. Observed Phase 4 results (SciFact + synthetic legal set)
+
+These figures were **measured in this project** on one Windows machine (CPU),
+Python 3.12, with `sentence-transformers/all-MiniLM-L6-v2` (384-d) and
+`cross-encoder/ms-marco-MiniLM-L6-v2`. They are single-machine observations, not
+a leaderboard. The exact runs are committed as artifacts in
+`benchmarks/recorded/` (see `benchmarks/README.md`).
+
+### SciFact (BEIR, document-level)
+
+The **full** SciFact corpus (5183 documents) is chunked with the `paragraph`
+profile (9050 chunks) and evaluated on the 300 test claims that carry judgments
+(the 809 unjudged queries in `queries.jsonl` are counted and excluded, never
+silently dropped). `k=10`, chunk candidate depth 100.
+
+| Configuration | recall@10 | nDCG@10 | MRR@10 | candidate_recall@100 |
+|---|---|---|---|---|
+| BM25 (`or`, paragraph) | 0.777 | 0.648 | 0.611 | 0.871 |
+| Dense (MiniLM) | 0.808 | 0.647 | 0.599 | 0.913 |
+| Hybrid (RRF, 200 candidates) | **0.825** | **0.686** | **0.647** | **0.943** |
+
+- BM25's nDCG@10 (~0.65) is in the range usually reported for Anserini BM25 on
+  SciFact, which is a sanity check that the metric plumbing is correct.
+- Hybrid RRF is best on every ranking metric here: the lexical and dense
+  candidate lists are complementary, and fusion keeps passages found by only one
+  retriever eligible.
+- `candidate_recall@100` (0.87–0.94) bounds what any reranker could achieve from
+  that pool: reranking can only reorder, never recover.
+
+### Matched reranking (SciFact, same 20-passage pool)
+
+To compare fairly, the baseline and the reranked run start from the **identical**
+20-chunk first-stage pool (this is the correction required by the phase spec: the
+baseline is the first-stage ranking of the *same* candidates, so a passage the
+reranker "finds" cannot have been absent from the pool). Both runs use BM25
+(`or`), `top_k=10`, chunk depth 20.
+
+| Configuration (pool of 20) | recall@10 | nDCG@10 | MRR@10 | candidate_recall@20 |
+|---|---|---|---|---|
+| BM25 (`or`) baseline | 0.777 | 0.648 | 0.611 | 0.814 |
+| BM25 + `ms-marco-MiniLM-L6-v2` rerank | **0.802** | **0.695** | **0.670** | 0.814 |
+
+Reranking improves nDCG@10 by ~0.047 and MRR@10 by ~0.059 with **no change to
+`candidate_recall@20`** — direct evidence that it only reordered the same pool
+and could not have recovered anything absent from it. Reranking cost is real on
+CPU: cross-encoder inference averaged ~750 ms per query for 20 candidates
+(p50 707 ms, p95 1057 ms) after a one-time ~16.7 s model load, so it is worth its
+quality gain only when ranking quality matters more than latency.
+
+### Legal chunking comparison (bundled synthetic set, evidence-level)
+
+The bundled `datasets/legal-contracts` set (7 synthetic contracts, 48
+natural-language queries, 65 clause/evidence units) is evaluated with
+**clause/evidence-level** relevance: a retrieved chunk counts only if it contains
+the judged clause's evidence text (or matches its section number). Pool depth 100.
+
+| Configuration | recall@10 | nDCG@10 | MRR@10 | candidate_recall@100 |
+|---|---|---|---|---|
+| BM25 (`or`), `paragraph` | 0.802 | 0.547 | 0.517 | 1.000 |
+| BM25 (`or`), `clause_aware` | 0.813 | 0.548 | 0.509 | 1.000 |
+
+Clause-aware chunking is a small, *within-noise* improvement at the top of the
+ranking on this tiny set (recall@10 0.813 vs 0.802), and the candidate pool is
+complete in both cases. This is an honest "no dramatic difference at this scale"
+result, not a claim that clause-aware chunking is unnecessary.
+
+### BM25 term combination (`and` vs `or`)
+
+The same legal set sizes the effect of lexical term combination:
+
+| Query mode | recall@10 | nDCG@10 | candidate_recall@100 |
+|---|---|---|---|
+| `and` (every term must appear) | 0.104 | 0.104 | 0.104 |
+| `or` (any term; BM25 ranks) | **0.802** | **0.547** | **1.000** |
+
+Long natural-language queries almost never contain *all* their terms in one
+chunk, so FTS5's implicit conjunction collapses to near-zero recall. This is a
+property of this lexical stack, reported rather than hidden; the interactive
+default stays `and` for backward-compatible exact-phrase behaviour, and
+evaluation defaults to `or`.
 
 ---
 

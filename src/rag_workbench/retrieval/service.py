@@ -37,12 +37,12 @@ from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.models import Chunk, Document, IndexProfile
 from rag_workbench.persistence.vector_store import get_vector_store
 from rag_workbench.reranking import build_reranker
-from rag_workbench.retrieval.bm25 import Bm25Retriever
+from rag_workbench.retrieval.bm25 import QUERY_MODES, Bm25Retriever
 from rag_workbench.retrieval.dense import DenseRetriever
 from rag_workbench.retrieval.hybrid import reciprocal_rank_fusion
 
 SUPPORTED_MODES = ("bm25", "dense", "hybrid")
-MAX_TOP_K = 50
+MAX_TOP_K = 100
 MAX_CANDIDATES = 500
 
 StoreFactory = Callable[[], VectorStore]
@@ -90,11 +90,17 @@ class SearchService:
         rerank: bool = False,
         reranker_model: str | None = None,
         rerank_candidates: int | None = None,
+        query_mode: str = "and",
     ) -> SearchResponse:
         if mode not in SUPPORTED_MODES:
             raise ValidationError(
                 f"mode '{mode}' is not supported; choose one of: {', '.join(SUPPORTED_MODES)}",
                 code="unsupported_mode",
+            )
+        if query_mode not in QUERY_MODES:
+            raise ValidationError(
+                f"query_mode must be one of: {', '.join(QUERY_MODES)}",
+                code="invalid_query_mode",
             )
         if top_k < 1 or top_k > MAX_TOP_K:
             raise ValidationError(f"top_k must be between 1 and {MAX_TOP_K}", code="invalid_top_k")
@@ -130,7 +136,12 @@ class SearchService:
 
             if mode == "bm25":
                 hits, timings = self._run_bm25(
-                    session, query=query, profile=profile, top_k=retrieval_k, collection=collection
+                    session,
+                    query=query,
+                    profile=profile,
+                    top_k=retrieval_k,
+                    collection=collection,
+                    query_mode=query_mode,
                 )
             elif mode == "dense":
                 hits, timings = self._run_dense(
@@ -149,6 +160,7 @@ class SearchService:
                     top_k=retrieval_k,
                     candidates=max(candidate_k, retrieval_k),
                     collection=collection,
+                    query_mode=query_mode,
                 )
 
             reranker_meta: dict[str, object] | None = None
@@ -169,6 +181,7 @@ class SearchService:
             collection=collection,
             top_k=top_k,
             candidates=candidate_k if mode != "bm25" else None,
+            query_mode=query_mode,
             rerank=rerank,
             rerank_candidates=rerank_pool,
             reranker=reranker_meta,
@@ -187,10 +200,16 @@ class SearchService:
         profile: IndexProfile,
         top_k: int,
         collection: str | None,
+        query_mode: str = "and",
     ) -> tuple[list[SearchHit], dict[str, float]]:
         started = time.perf_counter()
         hits = self._bm25.search(
-            session, query=query, profile_id=profile.id, top_k=top_k, collection=collection
+            session,
+            query=query,
+            profile_id=profile.id,
+            top_k=top_k,
+            collection=collection,
+            query_mode=query_mode,
         )
         return hits, {"lexical": self._ms(started)}
 
@@ -219,10 +238,16 @@ class SearchService:
         top_k: int,
         candidates: int,
         collection: str | None,
+        query_mode: str = "and",
     ) -> tuple[list[SearchHit], dict[str, float]]:
         lexical_started = time.perf_counter()
         bm25_hits = self._bm25.search(
-            session, query=query, profile_id=profile.id, top_k=candidates, collection=collection
+            session,
+            query=query,
+            profile_id=profile.id,
+            top_k=candidates,
+            collection=collection,
+            query_mode=query_mode,
         )
         timings = {"lexical": self._ms(lexical_started)}
 

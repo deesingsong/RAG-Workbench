@@ -20,6 +20,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: Repository root, used to locate the small committed datasets and recorded
+#: benchmark artifacts that ship with the source tree.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 #: Bumped whenever parser output (block/section extraction) changes in a way that
 #: would change chunk text. Part of an index profile's identity.
 DEFAULT_PARSER_VERSION = "1.0.0"
@@ -197,6 +201,21 @@ class Settings(BaseSettings):
     reranker_max_length: int | None = Field(default=None, ge=8, le=8192)
     rerank_candidates: int = Field(default=20, ge=1, le=500)
 
+    # Evaluation. The optional dense/reranker extras are only needed to *run*
+    # dense or reranked benchmarks locally; inspecting recorded experiments and
+    # BM25 evaluation need nothing extra.
+    default_eval_k: tuple[int, ...] = Field(default=(1, 3, 5, 10))
+    default_candidate_depth: int = Field(default=100, ge=1, le=500)
+    dataset_dir_name: str = "datasets"
+    bundled_datasets_dir: Path = _REPO_ROOT / "datasets"
+    recorded_experiments_dir: Path = _REPO_ROOT / "benchmarks" / "recorded"
+
+    # Public read-only demonstration mode. When true, every mutating endpoint is
+    # refused at the backend (not merely hidden in the UI) and the shared sample
+    # corpus is initialised once by a trusted internal bootstrap.
+    read_only: bool = False
+    autoseed_sample: bool = False
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024
@@ -213,6 +232,17 @@ class Settings(BaseSettings):
         """Persistent Qdrant local-mode storage directory."""
 
         return (self.data_dir / self.vector_dir_name).resolve()
+
+    @property
+    def datasets_dir(self) -> Path:
+        """Writable dataset root (imported/BEIR datasets live here)."""
+
+        return (self.data_dir / self.dataset_dir_name).resolve()
+
+    def dataset_roots(self) -> list[Path]:
+        """Dataset roots in search order: writable first, then the bundled set."""
+
+        return [self.datasets_dir, Path(self.bundled_datasets_dir)]
 
     def default_profile(self) -> IndexProfileSpec:
         """Build the configured default *lexical* index profile."""

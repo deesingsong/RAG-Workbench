@@ -94,3 +94,33 @@ class RerankError(RagWorkbenchError):
     """The reranker ran but the request could not be satisfied."""
 
     code = "rerank_error"
+
+
+class DatasetError(RagWorkbenchError):
+    """An evaluation dataset is missing, malformed or internally inconsistent."""
+
+    code = "dataset_error"
+
+
+class DatasetNotFoundError(NotFoundError):
+    """A named evaluation dataset does not exist in any configured root."""
+
+    code = "dataset_not_found"
+
+
+class ExperimentNotFoundError(NotFoundError):
+    """A recorded evaluation experiment does not exist."""
+
+    code = "experiment_not_found"
+
+
+class EvaluationError(RagWorkbenchError):
+    """An evaluation run could not be executed or configured."""
+
+    code = "evaluation_error"
+
+
+class ReadOnlyModeError(RagWorkbenchError):
+    """A mutating operation was attempted against a read-only demonstration instance."""
+
+    code = "read_only_mode"

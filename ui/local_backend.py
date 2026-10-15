@@ -41,6 +41,35 @@ def _port_open(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def load_secrets_into_env(prefix: str = "RAG_WORKBENCH_") -> list[str]:
+    """Copy Streamlit secrets named ``RAG_WORKBENCH_*`` into the environment.
+
+    On Streamlit Community Cloud there is no shell, so ``Settings`` (which reads
+    ``RAG_WORKBENCH_``-prefixed environment variables) would never see secrets
+    such as ``RAG_WORKBENCH_READ_ONLY``. This bridges ``st.secrets`` into the
+    environment once, before the in-process app is created. Explicit environment
+    variables always win, and secrets are never logged.
+    """
+
+    loaded: list[str] = []
+    try:
+        secrets = st.secrets
+    except Exception:  # pragma: no cover - no secrets file configured
+        return loaded
+    try:
+        items = dict(secrets)
+    except Exception:  # pragma: no cover - malformed secrets
+        return loaded
+    for key, value in items.items():
+        if not isinstance(key, str) or not key.startswith(prefix):
+            continue
+        if key in os.environ:
+            continue
+        os.environ[key] = str(value)
+        loaded.append(key)
+    return loaded
+
+
 def _health_ok(base_url: str) -> bool:
     try:
         return httpx.get(f"{base_url}/health", timeout=1.0).status_code == 200
@@ -75,12 +104,25 @@ def _inproc_api_url(host: str, port: int) -> str:
 def resolve_api_url() -> str:
     """Return the API base URL, starting the in-process backend when needed."""
 
+    load_secrets_into_env()
     configured = os.environ.get("RAG_WORKBENCH_API_URL", "").strip()
     if configured:
         return configured
     host = os.environ.get("RAG_WORKBENCH_INPROC_HOST", DEFAULT_HOST)
     port = int(os.environ.get("RAG_WORKBENCH_INPROC_PORT", str(DEFAULT_PORT)))
     return _inproc_api_url(host, port)
+
+
+def server_is_read_only(api_url: str) -> bool:
+    """Best-effort probe of the deployment's read-only flag (defaults False)."""
+
+    try:
+        response = httpx.get(f"{api_url}/v1/config", timeout=5.0)
+        if response.status_code == 200:
+            return bool(response.json().get("read_only", False))
+    except httpx.HTTPError:  # pragma: no cover - deployment convenience
+        return False
+    return False
 
 
 def seed_sample_if_empty(api_url: str) -> str | None:

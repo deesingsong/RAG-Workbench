@@ -1,0 +1,12 @@
+"""Retrieval evaluation: datasets, metrics, experiments and diagnostics.
+
+The package is intentionally small and dependency-free at import time. Heavy
+optional extras (``sentence-transformers`` for dense/rerank experiments) are only
+touched through the existing retrieval services, never imported here.
+"""
+
+from __future__ import annotations
+
+__all__ = ["__version__"]
+
+__version__ = "0.1.0"

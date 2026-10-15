@@ -6,7 +6,11 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 
-from rag_workbench.api.deps import get_ingestion_service, get_settings
+from rag_workbench.api.deps import (
+    get_ingestion_service,
+    get_settings,
+    require_writable,
+)
 from rag_workbench.api.schemas import (
     ChunkListResponse,
     DocumentListResponse,
@@ -15,10 +19,11 @@ from rag_workbench.api.schemas import (
     IngestionResult,
     ProfileListResponse,
 )
-from rag_workbench.config import ChunkerConfig, IndexProfileSpec, Settings
-from rag_workbench.domain.errors import FileTooLargeError, ValidationError
+from rag_workbench.config import Settings
+from rag_workbench.domain.errors import FileTooLargeError
 from rag_workbench.domain.schemas import DocumentDeleteResult
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.profiles import build_profile
 from rag_workbench.persistence.models import IngestionJob
 
 router = APIRouter()
@@ -47,44 +52,13 @@ async def _read_limited(upload: UploadFile, max_bytes: int) -> bytes:
     return b"".join(chunks)
 
 
-def _build_profile(
-    settings: Settings,
-    *,
-    strategy: str | None,
-    max_tokens: int | None,
-    overlap_tokens: int | None,
-    name: str | None,
-    embed: bool = False,
-    embedding_model: str | None = None,
-    embedding_dimension: int | None = None,
-) -> IndexProfileSpec:
-    try:
-        chunker = ChunkerConfig(
-            strategy=strategy or settings.default_chunk_strategy,  # type: ignore[arg-type]
-            max_tokens=max_tokens or settings.default_max_tokens,
-            overlap_tokens=(
-                overlap_tokens if overlap_tokens is not None else settings.default_overlap_tokens
-            ),
-        )
-    except ValueError as exc:
-        raise ValidationError(f"invalid chunking configuration: {exc}") from exc
-
-    if embed:
-        try:
-            return settings.dense_profile(
-                name=name or f"dense-{chunker.strategy}-{chunker.max_tokens}",
-                chunker=chunker,
-                embedding_model=embedding_model,
-                embedding_dimension=embedding_dimension,
-            )
-        except ValueError as exc:
-            raise ValidationError(f"invalid dense configuration: {exc}") from exc
-
-    profile_name = name or f"{chunker.strategy}-{chunker.max_tokens}"
-    return IndexProfileSpec(name=profile_name, chunker=chunker)
-
-
-@router.post("/documents", response_model=IngestionResult, status_code=201, tags=["documents"])
+@router.post(
+    "/documents",
+    response_model=IngestionResult,
+    status_code=201,
+    tags=["documents"],
+    dependencies=[Depends(require_writable)],
+)
 async def upload_document(
     file: UploadFile = File(...),
     collection: str | None = Form(default=None),
@@ -99,7 +73,7 @@ async def upload_document(
     service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestionResult:
     data = await _read_limited(file, settings.max_upload_bytes)
-    profile = _build_profile(
+    profile = build_profile(
         settings,
         strategy=strategy,
         max_tokens=max_tokens,
@@ -136,7 +110,12 @@ def get_document(
     return service.get_document(document_id)
 
 
-@router.delete("/documents/{document_id}", response_model=DocumentDeleteResult, tags=["documents"])
+@router.delete(
+    "/documents/{document_id}",
+    response_model=DocumentDeleteResult,
+    tags=["documents"],
+    dependencies=[Depends(require_writable)],
+)
 def delete_document(
     document_id: str,
     profile_id: str | None = Query(default=None),

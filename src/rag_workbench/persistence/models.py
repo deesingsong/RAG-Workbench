@@ -73,6 +73,10 @@ class Document(Base):
     collection: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
     source_name: Mapped[str] = mapped_column(String(400), nullable=False)
     source_checksum: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Original identifier of the source when it comes from an imported benchmark
+    # dataset (e.g. a BEIR document ID). ``None`` for ordinary uploads; used by
+    # document-level evaluation to map retrieved chunks back to benchmark IDs.
+    external_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False)
     imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -141,3 +145,69 @@ class IngestionJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     diagnostics: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     timings_ms: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class Experiment(Base):
+    """A recorded evaluation experiment.
+
+    Only compact, structured metadata lives here; the per-query rows live in
+    :class:`ExperimentQuery`, and large retrieved-text objects are never
+    duplicated (the trace keeps identifiers, scores and a short excerpt).
+    """
+
+    __tablename__ = "experiments"
+    __table_args__ = (Index("ix_experiments_dataset", "dataset_name"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    dataset_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    dataset_version: Mapped[str] = mapped_column(String(32), nullable=False, default="1")
+    dataset_checksum: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    relevance_mapping: Mapped[str] = mapped_column(String(24), nullable=False)
+    mode: Mapped[str] = mapped_column(String(24), nullable=False)
+    profile_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    collection: Mapped[str] = mapped_column(String(120), nullable=False)
+    rerank: Mapped[bool] = mapped_column(nullable=False, default=False)
+    candidate_depth: Mapped[int] = mapped_column(Integer, nullable=False)
+    top_k: Mapped[int] = mapped_column(Integer, nullable=False)
+    label: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    subset: Mapped[bool] = mapped_column(nullable=False, default=False)
+    git_commit: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    dataset: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    runtime: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    aggregate: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    candidate_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    counts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    latency: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    notes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    queries: Mapped[list[ExperimentQuery]] = relationship(
+        back_populates="experiment", cascade="all, delete-orphan"
+    )
+
+
+class ExperimentQuery(Base):
+    """Per-query metrics, diagnostics and a compact retrieval trace."""
+
+    __tablename__ = "experiment_queries"
+    __table_args__ = (Index("ix_experiment_queries_experiment", "experiment_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    experiment_id: Mapped[str] = mapped_column(
+        ForeignKey("experiments.id", ondelete="CASCADE"), nullable=False
+    )
+    query_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    num_relevant: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ok")
+    candidate_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    unique_documents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    sufficient_candidates: Mapped[bool] = mapped_column(nullable=False, default=True)
+    metrics: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    candidate_recall: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    timings_ms: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    diagnostics: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    trace: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+
+    experiment: Mapped[Experiment] = relationship(back_populates="queries")

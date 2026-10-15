@@ -24,6 +24,12 @@ from rag_workbench.domain.schemas import SearchHit
 
 _WORD_CHAR = re.compile(r"\w", re.UNICODE)
 
+#: Lexical query combination. ``and`` (the interactive default) requires every
+#: term to appear in a chunk; ``or`` matches any term and lets BM25 rank, which
+#: is what natural-language and benchmark queries need. Both are explicit so a
+#: result is never ambiguous about which was used.
+QUERY_MODES = ("and", "or")
+
 # Weighted columns of `chunk_fts`: text (1.0) and section_path (0.5).
 BM25_WEIGHTS = (1.0, 0.5)
 
@@ -53,11 +59,21 @@ LIMIT :limit
 """
 
 
-def build_match_query(raw: str) -> str:
-    """Build a safe FTS5 MATCH expression from untrusted user input."""
+def build_match_query(raw: str, *, mode: str = "and") -> str:
+    """Build a safe FTS5 MATCH expression from untrusted user input.
+
+    ``mode="and"`` requires all terms (FTS5's implicit conjunction); ``mode="or"``
+    combines the quoted terms with ``OR`` so partial matches are retrieved and
+    BM25 decides the order. Terms are always quoted individually, so FTS5
+    operators in user text stay literal.
+    """
 
     if raw is None or not raw.strip():
         raise ValidationError("query must not be empty", code="invalid_query")
+    if mode not in QUERY_MODES:
+        raise ValidationError(
+            f"query_mode must be one of: {', '.join(QUERY_MODES)}", code="invalid_query_mode"
+        )
 
     terms: list[str] = []
     for token in raw.split():
@@ -71,7 +87,8 @@ def build_match_query(raw: str) -> str:
             "query contains no searchable terms", code="invalid_query"
         )
 
-    return " ".join(f'"{term}"' for term in terms)
+    joiner = " OR " if mode == "or" else " "
+    return joiner.join(f'"{term}"' for term in terms)
 
 
 class Bm25Retriever:
@@ -85,8 +102,9 @@ class Bm25Retriever:
         profile_id: str,
         top_k: int,
         collection: str | None = None,
+        query_mode: str = "and",
     ) -> list[SearchHit]:
-        match = build_match_query(query)
+        match = build_match_query(query, mode=query_mode)
 
         collection_filter = ""
         params: dict[str, object] = {
@@ -129,4 +147,4 @@ class Bm25Retriever:
         return hits
 
 
-__all__ = ["BM25_WEIGHTS", "Bm25Retriever", "build_match_query"]
+__all__ = ["BM25_WEIGHTS", "QUERY_MODES", "Bm25Retriever", "build_match_query"]

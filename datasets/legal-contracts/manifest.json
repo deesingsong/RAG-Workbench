@@ -1,0 +1,24 @@
+{
+  "schema_version": "1",
+  "name": "legal-contracts",
+  "version": "1",
+  "source": "Original synthetic contracts authored for RAG Workbench",
+  "license": "CC0-1.0 (synthetic; no third-party text)",
+  "description": "Seven short commercial contracts (NDA, master services, SaaS subscription, data processing addendum, reseller, statement of work, software licence) with 48 clause-anchored retrieval queries. Fully synthetic and offline.",
+  "relevance_mapping": "evidence",
+  "corpus_count": 7,
+  "query_count": 48,
+  "qrel_count": 62,
+  "evidence_count": 65,
+  "corpus_sha256": "aca5a03ab7dc8fbadb2d264d7d4d22bbc77a2badfaba7aeb8972d8eee877cfe5",
+  "queries_sha256": "8a8642cadce208bdc879c1b8bed3a0b2894e2c96ffd70be480f44e0c341452c4",
+  "qrels_sha256": "09026b439f3e879b54fd167b4c5014379cb8220baa12eef6070e04e927bde36b",
+  "evidence_sha256": "afd8d10ba57376e774b4ba2722a1ea2ac968ad49bf19db969b34c87301287573",
+  "created_at": "2026-10-15T14:44:30.086278Z",
+  "notes": [
+    "All contract text is original and authored for this project; no third-party material is included.",
+    "Relevance is judged at the clause/evidence-unit level, never per whole document.",
+    "Clause numbering varies per contract (integers, decimals, roman numerals, letters) to exercise clause-boundary chunking.",
+    "Evidence ids follow '<contract_id>::<section_number>'."
+  ]
+}

@@ -98,6 +98,7 @@ class IngestionService:
         source_name: str,
         collection: str,
         profile: IndexProfileSpec,
+        external_id: str | None = None,
     ) -> IngestionResult:
         if len(data) > self._settings.max_upload_bytes:
             raise FileTooLargeError(
@@ -168,6 +169,7 @@ class IngestionService:
                         collection=collection,
                         source_name=source_name,
                         source_checksum=checksum,
+                        external_id=external_id,
                         mime_type=mime_type,
                         byte_size=len(data),
                         status="empty" if not parsed.blocks else "indexed",
@@ -175,6 +177,10 @@ class IngestionService:
                     )
                     session.add(document)
                     session.flush()
+                elif document.external_id is None and external_id is not None:
+                    # Backfill an identifier onto a document ingested before the
+                    # column existed, without ever clobbering a distinct one.
+                    document.external_id = external_id
 
                 chunk_started = time.perf_counter()
                 chunker = get_chunker(profile.chunker)
@@ -557,6 +563,7 @@ class IngestionService:
             source_checksum=document.source_checksum,
             mime_type=document.mime_type,
             byte_size=document.byte_size,
+            external_id=document.external_id,
             imported_at=document.imported_at,
             status=document.status,  # type: ignore[arg-type]
             diagnostics=list(document.diagnostics or []),

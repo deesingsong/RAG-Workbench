@@ -193,6 +193,7 @@ class SearchResponse(BaseModel):
     collection: str | None = None
     top_k: int
     candidates: int | None = None
+    query_mode: str = "and"
     rerank: bool = False
     rerank_candidates: int | None = None
     reranker: dict[str, object] | None = None
@@ -259,6 +260,7 @@ class DocumentRecord(BaseModel):
     source_checksum: str
     mime_type: str
     byte_size: int
+    external_id: str | None = None
     imported_at: datetime
     status: DocumentStatus
     diagnostics: list[str] = Field(default_factory=list)

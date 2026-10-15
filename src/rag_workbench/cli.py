@@ -12,6 +12,16 @@
     rag-workbench profiles
     rag-workbench rebuild-vectors --all
     rag-workbench vectors-status
+    rag-workbench datasets list
+    rag-workbench datasets download-scifact
+    rag-workbench datasets import --name scifact --corpus DIR/corpus.jsonl ...
+    rag-workbench datasets ingest scifact --strategy paragraph
+    rag-workbench eval run --dataset scifact --profile <id> --mode bm25
+    rag-workbench eval run --dataset scifact --profile <id> --rerank
+    rag-workbench eval list
+    rag-workbench eval show <experiment-id>
+    rag-workbench eval export <experiment-id> --format csv --out run.csv
+    rag-workbench eval failures <experiment-id>
     rag-workbench serve
 
 The CLI, the API and the tests all call the same core services; the CLI adds no
@@ -25,9 +35,13 @@ import json
 import sys
 from pathlib import Path
 
-from rag_workbench.config import ChunkerConfig, IndexProfileSpec, Settings, get_settings
+from rag_workbench.config import IndexProfileSpec, Settings, get_settings
 from rag_workbench.domain.errors import RagWorkbenchError
+from rag_workbench.evaluation.experiments import compact_record
+from rag_workbench.evaluation.runner import EvalRunConfig
+from rag_workbench.evaluation.service import EvaluationService
 from rag_workbench.ingestion.pipeline import IngestionService
+from rag_workbench.ingestion.profiles import build_profile
 from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
@@ -85,6 +99,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="candidate pool for dense/hybrid",
     )
     search.add_argument(
+        "--query-mode",
+        choices=["and", "or"],
+        default="and",
+        help="lexical term combination for BM25/hybrid (default: and)",
+    )
+    search.add_argument(
         "--rerank", action="store_true", help="rerank candidates with a cross-encoder"
     )
     search.add_argument(
@@ -134,28 +154,123 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--reload", action="store_true")
 
+    # ------------------------------------------------------------- datasets
+    datasets = sub.add_parser("datasets", help="list, import and ingest evaluation datasets")
+    datasets_sub = datasets.add_subparsers(dest="datasets_command", required=True)
+
+    datasets_list = datasets_sub.add_parser("list", help="list available datasets")
+    datasets_list.add_argument("--json", action="store_true")
+
+    datasets_import = datasets_sub.add_parser(
+        "import", help="normalise local BEIR-format files into a dataset"
+    )
+    datasets_import.add_argument("--name", required=True)
+    datasets_import.add_argument("--corpus", type=Path, required=True)
+    datasets_import.add_argument("--queries", type=Path, required=True)
+    datasets_import.add_argument("--qrels", type=Path, required=True)
+    datasets_import.add_argument("--evidence", type=Path, default=None)
+    datasets_import.add_argument("--source", required=True)
+    datasets_import.add_argument("--license", required=True)
+    datasets_import.add_argument("--version", default="1")
+    datasets_import.add_argument("--description", default="")
+    datasets_import.add_argument(
+        "--mapping", choices=["document", "evidence"], default="document"
+    )
+    datasets_import.add_argument("--json", action="store_true")
+
+    datasets_download = datasets_sub.add_parser(
+        "download-scifact", help="download and import the BEIR SciFact archive (explicit)"
+    )
+    datasets_download.add_argument("--name", default="scifact")
+    datasets_download.add_argument("--version", default="beir")
+    datasets_download.add_argument("--json", action="store_true")
+
+    datasets_ingest = datasets_sub.add_parser(
+        "ingest", help="ingest a dataset's corpus into an index profile"
+    )
+    datasets_ingest.add_argument("dataset")
+    datasets_ingest.add_argument("--collection", default=None)
+    datasets_ingest.add_argument(
+        "--strategy", choices=["paragraph", "fixed_token", "clause_aware"], default=None
+    )
+    datasets_ingest.add_argument("--max-tokens", type=int, default=None)
+    datasets_ingest.add_argument("--overlap-tokens", type=int, default=None)
+    datasets_ingest.add_argument("--name", default=None, help="index profile label")
+    datasets_ingest.add_argument("--embed", action="store_true")
+    datasets_ingest.add_argument("--embedding-model", default=None)
+    datasets_ingest.add_argument("--embedding-dimension", type=int, default=None)
+    datasets_ingest.add_argument("--limit", type=int, default=None)
+    datasets_ingest.add_argument("--json", action="store_true")
+
+    # -------------------------------------------------------------- evaluation
+    evaluation = sub.add_parser("eval", help="run and inspect retrieval experiments")
+    eval_sub = evaluation.add_subparsers(dest="eval_command", required=True)
+
+    eval_run = eval_sub.add_parser("run", help="run an evaluation configuration")
+    eval_run.add_argument("--dataset", required=True)
+    eval_run.add_argument("--profile", required=True, help="index profile ID")
+    eval_run.add_argument("--collection", default=None)
+    eval_run.add_argument("--mode", choices=["bm25", "dense", "hybrid"], default="bm25")
+    eval_run.add_argument("--query-mode", choices=["and", "or"], default="or")
+    eval_run.add_argument("--candidate-depth", type=int, default=None)
+    eval_run.add_argument("--top-k", type=int, default=10)
+    eval_run.add_argument("--k", default="1,3,5,10", help="comma-separated cut-offs")
+    eval_run.add_argument("--rerank", action="store_true")
+    eval_run.add_argument("--reranker-model", default=None)
+    eval_run.add_argument("--rerank-candidates", type=int, default=None)
+    eval_run.add_argument("--candidates", type=int, default=None)
+    eval_run.add_argument("--max-queries", type=int, default=None)
+    eval_run.add_argument("--label", default=None)
+    eval_run.add_argument("--subset", action="store_true")
+    eval_run.add_argument("--json", action="store_true")
+    eval_run.add_argument("--out", type=Path, default=None, help="also write the JSON record here")
+
+    eval_list = eval_sub.add_parser("list", help="list live and recorded experiments")
+    eval_list.add_argument("--dataset", default=None)
+    eval_list.add_argument("--json", action="store_true")
+
+    eval_show = eval_sub.add_parser("show", help="show one experiment record")
+    eval_show.add_argument("experiment_id")
+    eval_show.add_argument("--json", action="store_true")
+
+    eval_export = eval_sub.add_parser("export", help="export an experiment as JSON or CSV")
+    eval_export.add_argument("experiment_id")
+    eval_export.add_argument("--format", choices=["json", "csv"], default="json")
+    eval_export.add_argument("--out", type=Path, default=None)
+
+    eval_failures = eval_sub.add_parser(
+        "failures", help="list queries with observed failure diagnoses"
+    )
+    eval_failures.add_argument("experiment_id")
+    eval_failures.add_argument("--limit", type=int, default=50)
+    eval_failures.add_argument("--json", action="store_true")
+
+    eval_record = eval_sub.add_parser(
+        "record", help="write an experiment as a committed read-only artifact"
+    )
+    eval_record.add_argument("experiment_id")
+    eval_record.add_argument("--name", default=None, help="artifact filename")
+    eval_record.add_argument("--directory", type=Path, default=None)
+    eval_record.add_argument(
+        "--full",
+        action="store_true",
+        help="write the complete record (large); default trims per-query traces",
+    )
+
     return parser
 
 
 def _profile_from_args(settings: Settings, args: argparse.Namespace) -> IndexProfileSpec:
-    chunker = ChunkerConfig(
-        strategy=args.strategy or settings.default_chunk_strategy,
-        max_tokens=args.max_tokens or settings.default_max_tokens,
-        overlap_tokens=(
-            args.overlap_tokens
-            if args.overlap_tokens is not None
-            else settings.default_overlap_tokens
-        ),
+    return build_profile(
+        settings,
+        strategy=args.strategy,
+        max_tokens=args.max_tokens,
+        overlap_tokens=args.overlap_tokens,
+        name=args.name,
+        embed=getattr(args, "embed", False),
+        embedding_model=getattr(args, "embedding_model", None),
+        embedding_dimension=getattr(args, "embedding_dimension", None),
     )
-    if getattr(args, "embed", False):
-        return settings.dense_profile(
-            name=args.name or f"dense-{chunker.strategy}-{chunker.max_tokens}",
-            chunker=chunker,
-            embedding_model=args.embedding_model,
-            embedding_dimension=args.embedding_dimension,
-        )
-    name = args.name or f"{chunker.strategy}-{chunker.max_tokens}"
-    return IndexProfileSpec(name=name, chunker=chunker)
 
 
 def _cmd_ingest(settings: Settings, database: Database, args: argparse.Namespace) -> int:
@@ -194,6 +309,7 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
         rerank=args.rerank,
         reranker_model=args.reranker_model,
         rerank_candidates=args.rerank_candidates,
+        query_mode=args.query_mode,
     )
     if args.json:
         print(response.model_dump_json(indent=2))
@@ -206,7 +322,8 @@ def _cmd_search(settings: Settings, database: Database, args: argparse.Namespace
             f"pool={response.rerank_candidates}"
         )
     print(
-        f"query={response.query!r} mode={response.mode} profile={response.profile_id} "
+        f"query={response.query!r} mode={response.mode} query_mode={response.query_mode} "
+        f"profile={response.profile_id} "
         f"({response.profile_name}) hits={len(response.hits)}{rerank_note} "
         f"total_ms={response.total_ms} timings_ms={response.timings_ms}"
     )
@@ -351,6 +468,228 @@ def _cmd_vectors_status(settings: Settings, database: Database, args: argparse.N
     return 0
 
 
+def _evaluation_service(settings: Settings, database: Database) -> EvaluationService:
+    ingestion = IngestionService(database, settings)
+    search = SearchService(database, settings)
+    return EvaluationService(database, settings, ingestion, search)
+
+
+def _cmd_datasets(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    service = _evaluation_service(settings, database)
+    command = args.datasets_command
+    if command == "list":
+        datasets = service.list_datasets()
+        if args.json:
+            print(json.dumps(datasets, indent=2))
+            return 0
+        if not datasets:
+            print("no datasets available", file=sys.stderr)
+            return 0
+        print(f"{len(datasets)} dataset(s)")
+        for item in datasets:
+            print(
+                f"  {item['slug']}  {item['name']}  v{item['version']}  "
+                f"mapping={item['relevance_mapping']} docs={item['corpus_count']} "
+                f"queries={item['query_count']} qrels={item['qrel_count']}"
+            )
+            print(f"     source: {item['source']}")
+        return 0
+
+    if command == "import":
+        summary = service.import_beir(
+            name=args.name,
+            corpus_path=args.corpus,
+            queries_path=args.queries,
+            qrels_path=args.qrels,
+            source=args.source,
+            license=args.license,
+            version=args.version,
+            description=args.description,
+            relevance_mapping=args.mapping,
+            evidence_path=args.evidence,
+        )
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        else:
+            print(
+                f"imported '{summary['name']}' -> {summary['slug']} "
+                f"({summary['corpus_count']} docs, {summary['query_count']} queries, "
+                f"{summary['qrel_count']} qrels, mapping={summary['relevance_mapping']})"
+            )
+        return 0
+
+    if command == "download-scifact":
+        summary = service.download_and_import_scifact(name=args.name, version=args.version)
+        if args.json:
+            print(json.dumps(summary, indent=2))
+        else:
+            print(
+                f"downloaded and imported SciFact -> {summary['slug']} "
+                f"({summary['corpus_count']} docs, {summary['query_count']} queries, "
+                f"{summary['qrel_count']} qrels)"
+            )
+        return 0
+
+    if command == "ingest":
+        report = service.ingest_dataset(
+            args.dataset,
+            collection=args.collection,
+            strategy=args.strategy,
+            max_tokens=args.max_tokens,
+            overlap_tokens=args.overlap_tokens,
+            profile_name=args.name,
+            embed=args.embed,
+            embedding_model=args.embedding_model,
+            embedding_dimension=args.embedding_dimension,
+            limit=args.limit,
+        )
+        if args.json:
+            print(report.model_dump_json(indent=2))
+        else:
+            print(
+                f"ingested '{report.dataset}' into collection '{report.collection}' "
+                f"profile={report.profile_id}: documents={report.documents} "
+                f"new={report.new_documents} duplicates={report.duplicates} "
+                f"chunks={report.chunks}"
+            )
+            for note in report.diagnostics:
+                print(f"  note: {note}")
+        return 0
+
+    raise RagWorkbenchError(f"unknown datasets command: {command}", code="cli_error")
+
+
+def _cmd_eval(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    service = _evaluation_service(settings, database)
+    command = args.eval_command
+
+    if command == "run":
+        k_values = tuple(int(part) for part in args.k.split(",") if part.strip())
+        candidate_depth = args.candidate_depth or settings.default_candidate_depth
+        config = EvalRunConfig(
+            dataset=args.dataset,
+            profile_id=args.profile,
+            collection=args.collection,
+            mode=args.mode,
+            query_mode=args.query_mode,
+            candidate_depth=candidate_depth,
+            top_k=args.top_k,
+            k_values=k_values,
+            rerank=args.rerank,
+            rerank_candidates=args.rerank_candidates,
+            reranker_model=args.reranker_model,
+            candidates=args.candidates,
+            max_queries=args.max_queries,
+            label=args.label,
+            subset=args.subset,
+        )
+        record = service.run(config)
+        if args.out is not None:
+            args.out.write_text(json.dumps(record, indent=2), encoding="utf-8")
+        if args.json:
+            print(json.dumps(record, indent=2))
+            return 0
+        print(f"experiment {record['experiment_id']} ({record.get('source', 'live')})")
+        print(f"  dataset   : {record['dataset'].get('name')} v{record['dataset'].get('version')}")
+        print(f"  config    : mode={record['config'].get('mode')} "
+              f"query_mode={record['config'].get('query_mode')} "
+              f"profile={record['config'].get('profile_id')} "
+              f"rerank={record['config'].get('rerank')} "
+              f"depth={record['config'].get('candidate_depth')}")
+        print(f"  counts    : {record['counts']}")
+        for name in sorted(record["aggregate"]):
+            print(f"  {name:<12}: {record['aggregate'][name]:.4f}")
+        for name in sorted(record.get("candidate_metrics", {})):
+            print(f"  {name:<12}: {record['candidate_metrics'][name]:.4f}")
+        rerank_stats = record.get("latency", {}).get("rerank_ms")
+        if rerank_stats:
+            print(f"  rerank_ms : {rerank_stats}")
+            print(f"  model_init: {record['latency'].get('model_init_ms')} ms")
+        for note in record.get("notes", []):
+            print(f"  note      : {note}")
+        return 0
+
+    if command == "list":
+        experiments = service.list_experiments(dataset=args.dataset)
+        if args.json:
+            print(json.dumps(experiments, indent=2))
+            return 0
+        if not experiments:
+            print("no experiments recorded", file=sys.stderr)
+            return 0
+        for item in experiments:
+            recall = item.get("aggregate", {}).get("recall@10")
+            recall_text = f" recall@10={recall:.4f}" if isinstance(recall, float) else ""
+            print(
+                f"  {item['experiment_id']} [{item.get('source')}] "
+                f"dataset={item.get('dataset')} mode={item.get('mode')} "
+                f"rerank={item.get('rerank')}{recall_text}"
+            )
+        return 0
+
+    if command == "show":
+        record = service.get_experiment(args.experiment_id)
+        print(json.dumps(record, indent=2))
+        return 0
+
+    if command == "export":
+        if args.format == "csv":
+            text = service.export_csv(args.experiment_id)
+        else:
+            text = json.dumps(service.export_json(args.experiment_id), indent=2)
+        if args.out is not None:
+            args.out.write_text(text, encoding="utf-8")
+            print(f"wrote {args.out}")
+        else:
+            print(text)
+        return 0
+
+    if command == "failures":
+        record = service.get_experiment(args.experiment_id)
+        shown = 0
+        for query in record.get("per_query", []):
+            codes = [
+                item["code"]
+                for item in query.get("diagnostics", [])
+                if item["code"] not in {"unresolved"}
+            ]
+            if not codes:
+                continue
+            if shown >= args.limit:
+                break
+            shown += 1
+            metrics = query.get("metrics") or {}
+            recall = metrics.get(f"recall@{10}")
+            top_key = query["trace"][0]["key"] if query.get("trace") else "(none)"
+            print(
+                f"  {query['query_id']}  relevant={query['num_relevant']} "
+                f"recall@10={recall if recall is None else round(recall, 3)} "
+                f"top={top_key}  codes={','.join(codes)}"
+            )
+            print(f"     {query['query'][:120]}")
+        print(f"{shown} failure(s) shown for {args.experiment_id}")
+        return 0
+
+    if command == "record":
+        record = service.get_experiment(args.experiment_id)
+        # A committed artifact is explicitly labelled as previously recorded so a
+        # read-only deployment never implies the run happened in that process.
+        record["source"] = "recorded"
+        if not args.full:
+            record = compact_record(record)
+        directory = args.directory or settings.recorded_experiments_dir
+        directory.mkdir(parents=True, exist_ok=True)
+        filename = args.name or f"{args.experiment_id}.json"
+        path = directory / filename
+        # Compact JSON: these are machine artifacts, and the per-query records are
+        # large; pretty-printing would only inflate the committed diff.
+        path.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+        print(f"recorded {args.experiment_id} -> {path}")
+        return 0
+
+    raise RagWorkbenchError(f"unknown eval command: {command}", code="cli_error")
+
+
 def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -395,6 +734,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_rebuild_vectors(settings, database, args)
         if args.command == "vectors-status":
             return _cmd_vectors_status(settings, database, args)
+        if args.command == "datasets":
+            return _cmd_datasets(settings, database, args)
+        if args.command == "eval":
+            return _cmd_eval(settings, database, args)
         parser.error(f"unknown command: {args.command}")
         return 2
     except RagWorkbenchError as exc:
