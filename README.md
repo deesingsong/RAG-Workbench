@@ -276,7 +276,11 @@ Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
 store reset when the app sleeps or reboots (hence the auto-seed, which also
 fills in a missing demonstration profile after a code upgrade) — and the
 deep-learning dense stack is heavy for the free tier, so BM25-only is the
-default live demo.
+default live demo. The committed datasets and recorded artifacts are located by
+finding the repository root (marker: `pyproject.toml` beside `src/rag_workbench`)
+via the module path, the working directory and `sys.path`, so they are still
+found when the package is installed non-editable rather than from the source
+tree.
 
 ---
 

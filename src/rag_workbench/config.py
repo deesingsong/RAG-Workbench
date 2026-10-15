@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -20,9 +21,39 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: Repository root, used to locate the small committed datasets and recorded
-#: benchmark artifacts that ship with the source tree.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+def find_repo_root(start: Path | None = None) -> Path:
+    """Locate the repository root that holds the committed assets.
+
+    The package may be installed editable (running from the source tree) or as a
+    wheel under ``site-packages``. A fixed ``parents[n]`` walk is only correct for
+    the former; for the latter it points into the interpreter's library
+    directory, so ``datasets/`` and ``benchmarks/recorded/`` would silently not
+    be found. The root is therefore discovered by looking for the project marker
+    (``pyproject.toml`` beside ``src/rag_workbench``) while walking, in order:
+    up from this module, the current working directory, and every ``sys.path``
+    entry (the single-process host inserts ``<repo>/src`` there). The source-tree
+    grandparent is the final fallback, so local development is unchanged.
+    """
+
+    here = (start or Path(__file__)).resolve()
+    candidates: list[Path] = [*here.parents, Path.cwd().resolve()]
+    for entry in sys.path:
+        if not entry:
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:  # pragma: no cover - unreadable path entry
+            continue
+        candidates.append(resolved)
+        candidates.extend(resolved.parents)
+    for candidate in candidates:
+        if (candidate / "pyproject.toml").is_file() and (
+            candidate / "src" / "rag_workbench"
+        ).is_dir():
+            return candidate
+    return here.parents[2]
+
 
 #: Bumped whenever parser output (block/section extraction) changes in a way that
 #: would change chunk text. Part of an index profile's identity.
@@ -207,8 +238,10 @@ class Settings(BaseSettings):
     default_eval_k: tuple[int, ...] = Field(default=(1, 3, 5, 10))
     default_candidate_depth: int = Field(default=100, ge=1, le=500)
     dataset_dir_name: str = "datasets"
-    bundled_datasets_dir: Path = _REPO_ROOT / "datasets"
-    recorded_experiments_dir: Path = _REPO_ROOT / "benchmarks" / "recorded"
+    bundled_datasets_dir: Path = Field(default_factory=lambda: find_repo_root() / "datasets")
+    recorded_experiments_dir: Path = Field(
+        default_factory=lambda: find_repo_root() / "benchmarks" / "recorded"
+    )
 
     # Public read-only demonstration mode. When true, every mutating endpoint is
     # refused at the backend (not merely hidden in the UI) and the shared sample

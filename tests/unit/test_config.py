@@ -5,7 +5,27 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from rag_workbench.config import ChunkerConfig, IndexProfileSpec, Settings
+from rag_workbench.config import (
+    ChunkerConfig,
+    IndexProfileSpec,
+    Settings,
+    find_repo_root,
+)
+
+
+def test_find_repo_root_locates_committed_assets():
+    """The repo root must resolve even when the package lives in site-packages.
+
+    A fixed ``parents[n]`` walk breaks for a non-editable install; the committed
+    datasets and recorded artifacts would then silently disappear from a
+    deployment (as they did once). This locks the marker-based discovery.
+    """
+
+    root = find_repo_root()
+    assert (root / "pyproject.toml").is_file()
+    assert (root / "src" / "rag_workbench").is_dir()
+    assert (root / "datasets" / "legal-contracts").is_dir()
+    assert (root / "benchmarks" / "recorded").is_dir()
 
 
 def test_overlap_must_be_smaller_than_max():

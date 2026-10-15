@@ -11,10 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rag_workbench.config import ChunkerConfig, IndexProfileSpec
+from rag_workbench.config import ChunkerConfig, IndexProfileSpec, find_repo_root
 from rag_workbench.ingestion.pipeline import IngestionService
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = find_repo_root()
 BUNDLED_SAMPLE = _REPO_ROOT / "tests" / "fixtures" / "sample_contract.txt"
 
 #: Demonstration profiles the sample corpus is seeded under.
