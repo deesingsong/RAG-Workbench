@@ -9,8 +9,9 @@ from __future__ import annotations
 
 from fastapi import Depends, Request
 
+from rag_workbench.answering.pipeline import AnswerService
 from rag_workbench.config import Settings
-from rag_workbench.domain.errors import ReadOnlyModeError
+from rag_workbench.domain.errors import GeneratorUnavailableError, ReadOnlyModeError
 from rag_workbench.evaluation.service import EvaluationService
 from rag_workbench.ingestion.pipeline import IngestionService
 from rag_workbench.ingestion.vector_index import VectorIndexer
@@ -53,3 +54,31 @@ def get_evaluation_service(request: Request) -> EvaluationService:
 
 def get_vector_indexer(request: Request) -> VectorIndexer:
     return request.app.state.vector_indexer
+
+
+def get_answer_service(request: Request) -> AnswerService:
+    return request.app.state.answer_service
+
+
+def require_generation(settings: Settings = Depends(get_settings)) -> None:
+    """Refuse live generation unless it is deliberately enabled and permitted.
+
+    Two independent gates, both enforced in the backend:
+
+    * a read-only deployment never runs generation (403), so the public demo
+      cannot be turned into a model endpoint; and
+    * live generation is opt-in (``RAG_WORKBENCH_GENERATION_ENABLED``); when it is
+      off the endpoint reports 503 with the exact variable to set, and every other
+      feature keeps working.
+    """
+
+    if settings.read_only:
+        raise ReadOnlyModeError(
+            "this deployment is read-only; live answer generation is disabled. "
+            "Recorded answer demonstrations are available instead."
+        )
+    if not settings.generation_enabled:
+        raise GeneratorUnavailableError(
+            "live answer generation is disabled; set "
+            "RAG_WORKBENCH_GENERATION_ENABLED=true and run Ollama to enable it"
+        )

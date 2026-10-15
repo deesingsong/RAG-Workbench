@@ -14,7 +14,14 @@ import math
 import re
 from collections.abc import Sequence
 
-from rag_workbench.domain.schemas import EmbeddingBatch, RerankBatch
+from rag_workbench.domain.schemas import (
+    AnswerPayload,
+    Claim,
+    EmbeddingBatch,
+    GenerationRequest,
+    GenerationResult,
+    RerankBatch,
+)
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -165,4 +172,101 @@ class FakeReranker:
             max_length=self._max_length,
             truncated_count=truncated,
             diagnostics=diagnostics,
+        )
+
+
+class FakeAnswerGenerator:
+    """A deterministic, offline stand-in for the Ollama generator.
+
+    It lets the answer pipeline be exercised end to end — retrieval, context
+    assembly, citation verification, diagnostics — with no model. ``mode`` selects
+    a behaviour: ``"answer"`` (the default), ``"malformed"`` or ``"timeout"``.
+    ``citations`` overrides the ids the fake cites, which is how unknown-citation
+    and no-citation cases are constructed.
+    """
+
+    def __init__(
+        self,
+        *,
+        model_id: str = "fake-answerer",
+        available: bool = True,
+        mode: str = "answer",
+        status: str | None = None,
+        citations: list[str] | None = None,
+        claim_text: str = "The passages state the relevant fact.",
+    ) -> None:
+        self._model_id = model_id
+        self._available = available
+        self._mode = mode
+        self._status = status
+        self._citations = citations
+        self._claim_text = claim_text
+        self.generate_calls = 0
+        self.last_request: GenerationRequest | None = None
+        self.ensure_calls = 0
+
+    @property
+    def model_id(self) -> str:
+        return self._model_id
+
+    def ensure_available(self) -> None:
+        self.ensure_calls += 1
+        if not self._available:
+            from rag_workbench.domain.errors import GeneratorUnavailableError
+
+            raise GeneratorUnavailableError("fake generator is not available")
+
+    def generate(self, request: GenerationRequest) -> GenerationResult:
+        self.generate_calls += 1
+        self.last_request = request
+        if self._mode == "malformed":
+            return GenerationResult(
+                model_id=self._model_id,
+                structured=False,
+                raw_text="this is not json",
+                error="malformed JSON in model output",
+                diagnostics=["the model did not return parseable JSON"],
+            )
+        if self._mode == "timeout":
+            return GenerationResult(
+                model_id=self._model_id,
+                structured=False,
+                error="generation timed out",
+                diagnostics=["generation timed out"],
+                timings_ms={"generation": 5.0},
+            )
+        status = self._status or (
+            "insufficient_evidence" if not request.evidence else "answered"
+        )
+        if status == "insufficient_evidence":
+            payload = AnswerPayload(
+                status="insufficient_evidence",
+                answer="",
+                claims=[],
+                unanswered=[],
+                reason="the passages do not contain the answer",
+            )
+        else:
+            if self._citations is not None:
+                citations = list(self._citations)
+            else:
+                citations = [item.source_id for item in request.evidence]
+            answer = "Grounded answer."
+            if citations:
+                answer = f"Grounded answer citing [{citations[0]}]."
+            payload = AnswerPayload(
+                status=status,
+                answer=answer,
+                claims=[Claim(text=self._claim_text, citations=citations)],
+                unanswered=[],
+            )
+        return GenerationResult(
+            model_id=self._model_id,
+            payload=payload,
+            raw_text=payload.model_dump_json(),
+            structured=True,
+            done_reason="stop",
+            prompt_tokens=10,
+            completion_tokens=20,
+            timings_ms={"generation": 1.0},
         )

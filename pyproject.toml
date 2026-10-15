@@ -61,9 +61,10 @@ known-first-party = ["rag_workbench", "local_backend"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not dense and not reranker'"
+addopts = "-q -m 'not dense and not reranker and not ollama'"
 markers = [
     "dense: needs the optional 'dense' extra and downloads a Sentence Transformers model; run with: uv run pytest -m dense",
     "reranker: needs the optional 'dense' extra and downloads the cross-encoder model; run with: uv run pytest -m reranker",
+    "ollama: needs a running local Ollama with a pulled model; run with: uv run pytest -m ollama",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]

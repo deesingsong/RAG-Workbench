@@ -1,0 +1,106 @@
+{
+  "schema_version": "1",
+  "name": "legal-contracts-answers",
+  "version": "1",
+  "collection": "legal-contracts",
+  "source": "Bundled synthetic legal contracts (datasets/legal-contracts). Original text authored for RAG Workbench.",
+  "license": "CC0-1.0 (synthetic; no third-party text)",
+  "description": "A small grounded-answer set over the synthetic contracts: answerable, partially answerable and unanswerable questions with manually verifiable reference answers and evidence keyword anchors. It measures answer grounding, citation validity and honest abstention, not legal accuracy.",
+  "limitations": [
+    "Small and synthetic: it demonstrates the answer pipeline, not legal accuracy.",
+    "Reference answers are manually verified against the bundled contract text only.",
+    "Whether a cited passage genuinely supports a claim is not deterministically decidable and is not scored here."
+  ],
+  "questions": [
+    {
+      "id": "aq-001",
+      "question": "How long does the Mutual Non-Disclosure Agreement remain in effect, and how long do the confidentiality obligations survive termination?",
+      "expected_status": "answered",
+      "reference_answer": "It remains in effect for three years from the Effective Date, and the confidentiality obligations survive termination for a further two years.",
+      "reference_keywords": ["three years", "two years"],
+      "reference_sections": ["nda-01::6"],
+      "note": "Directly stated in Section 6 of the NDA."
+    },
+    {
+      "id": "aq-002",
+      "question": "Within how many days must the Customer pay an undisputed invoice under the Master Services Agreement, and what interest applies to overdue amounts?",
+      "expected_status": "answered",
+      "reference_answer": "Undisputed invoices are payable within thirty days of receipt, and overdue amounts accrue interest at one percent per month (or the maximum rate permitted by law, whichever is lower).",
+      "reference_keywords": ["thirty days", "one percent per month"],
+      "reference_sections": ["msa-02::3.1", "msa-02::3.2"],
+      "note": "Answer spans the invoicing and late-payment clauses."
+    },
+    {
+      "id": "aq-003",
+      "question": "What availability percentage does the SaaS subscription provider commit to under the service levels?",
+      "expected_status": "answered",
+      "reference_answer": "The provider shall make the hosted service available at least 99.9 percent of the time in each calendar month, excluding scheduled maintenance.",
+      "reference_keywords": ["99.9 percent"],
+      "reference_sections": ["saas-03::II"],
+      "note": "Stated in the Service Levels clause."
+    },
+    {
+      "id": "aq-004",
+      "question": "Under what conditions may Personal Data be transferred outside the European Economic Area under the Data Processing Addendum?",
+      "expected_status": "answered",
+      "reference_answer": "Only where the transfer is covered by an adequacy decision or appropriate safeguards.",
+      "reference_keywords": ["adequacy decision", "appropriate safeguards"],
+      "reference_sections": ["dpa-04::7"],
+      "note": "Stated in the International Transfers clause."
+    },
+    {
+      "id": "aq-005",
+      "question": "What trademark rights does the Company grant the Reseller under the Reseller Agreement?",
+      "expected_status": "answered",
+      "reference_answer": "A non-exclusive, revocable licence to use the Company's trademarks solely to market the Products during the term.",
+      "reference_keywords": ["non-exclusive, revocable licence", "trademarks"],
+      "reference_sections": ["reseller-05::F"],
+      "note": "Stated in the Trademark Licence clause."
+    },
+    {
+      "id": "aq-006",
+      "question": "What is the fixed fee the Customer must pay for the Statement of Work deliverables?",
+      "expected_status": "answered",
+      "reference_answer": "A fixed fee of one hundred thousand dollars for the Deliverables.",
+      "reference_keywords": ["one hundred thousand dollars"],
+      "reference_sections": ["sow-06::2.1"],
+      "note": "Stated in the Fees clause of the Statement of Work."
+    },
+    {
+      "id": "aq-007",
+      "question": "What law governs the Mutual Non-Disclosure Agreement, and what recovery-time objective does the SaaS provider commit to after a disaster?",
+      "expected_status": "partially_answered",
+      "reference_answer": "The NDA is governed by the laws of the State of Delaware. The contracts state no disaster-recovery recovery-time objective, so that part is unanswerable.",
+      "reference_keywords": ["Delaware"],
+      "reference_sections": ["nda-01::8"],
+      "note": "First part is answerable; the second is deliberately absent from the corpus."
+    },
+    {
+      "id": "aq-008",
+      "question": "What penalty does the Master Services Agreement impose on the Supplier for late delivery of Services?",
+      "expected_status": "insufficient_evidence",
+      "reference_answer": "",
+      "reference_keywords": [],
+      "reference_sections": [],
+      "note": "The MSA states no late-delivery penalty; a grounded answer must abstain."
+    },
+    {
+      "id": "aq-009",
+      "question": "What is the annual salary of the Vendor's chief executive officer under the Software Licence Agreement?",
+      "expected_status": "insufficient_evidence",
+      "reference_answer": "",
+      "reference_keywords": [],
+      "reference_sections": [],
+      "note": "Not present anywhere in the corpus; a grounded answer must abstain."
+    },
+    {
+      "id": "aq-010",
+      "question": "What is the cap on each party's aggregate liability under the Master Services Agreement?",
+      "expected_status": "answered",
+      "reference_answer": "Except for fraud and wilful misconduct, liability is capped at the fees paid or payable in the twelve months preceding the claim.",
+      "reference_keywords": ["twelve months preceding the claim"],
+      "reference_sections": ["msa-02::6"],
+      "note": "Stated in the Limitation of Liability clause."
+    }
+  ]
+}

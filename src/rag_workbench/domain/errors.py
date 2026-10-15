@@ -124,3 +124,21 @@ class ReadOnlyModeError(RagWorkbenchError):
     """A mutating operation was attempted against a read-only demonstration instance."""
 
     code = "read_only_mode"
+
+
+class GenerationError(RagWorkbenchError):
+    """Answer generation was requested but could not be completed."""
+
+    code = "generation_error"
+
+
+class GeneratorUnavailableError(RagWorkbenchError):
+    """The local answer generator (Ollama) is disabled, unreachable or missing a model."""
+
+    code = "generator_unavailable"
+
+
+class AnswerNotFoundError(NotFoundError):
+    """A recorded answer demonstration does not exist."""
+
+    code = "answer_not_found"

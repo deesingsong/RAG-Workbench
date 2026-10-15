@@ -15,7 +15,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from rag_workbench import __version__
-from rag_workbench.api.routes import documents, evaluation, health, search, vectors
+from rag_workbench.answering.pipeline import AnswerService
+from rag_workbench.api.routes import (
+    answer,
+    documents,
+    evaluation,
+    health,
+    search,
+    vectors,
+)
 from rag_workbench.build import deployment_revision
 from rag_workbench.config import Settings, find_repo_root, get_settings
 from rag_workbench.domain.errors import (
@@ -24,6 +32,8 @@ from rag_workbench.domain.errors import (
     DimensionMismatchError,
     EvaluationError,
     FileTooLargeError,
+    GenerationError,
+    GeneratorUnavailableError,
     IngestionError,
     NotFoundError,
     ParsingError,
@@ -63,6 +73,8 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     DatasetError: 400,
     EvaluationError: 400,
     ReadOnlyModeError: 403,
+    GenerationError: 400,
+    GeneratorUnavailableError: 503,
 }
 
 
@@ -103,6 +115,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.evaluation_service = EvaluationService(
         database, settings, app.state.ingestion_service, app.state.search_service
     )
+    app.state.answer_service = AnswerService(
+        database, settings, app.state.search_service
+    )
 
     @app.exception_handler(RagWorkbenchError)
     async def _handle_workbench_error(_request: Request, exc: RagWorkbenchError) -> JSONResponse:
@@ -134,6 +149,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(search.router, prefix="/v1")
     app.include_router(vectors.router, prefix="/v1")
     app.include_router(evaluation.router, prefix="/v1")
+    app.include_router(answer.router, prefix="/v1")
     return app
 
 

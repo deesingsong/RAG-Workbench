@@ -249,6 +249,29 @@ class Settings(BaseSettings):
     read_only: bool = False
     autoseed_sample: bool = False
 
+    # Optional local answer generation via Ollama (Phase 5). Live generation is a
+    # *separate, opt-in* capability: it is off by default so the default install,
+    # the offline test suite and the public read-only demo never require Ollama or
+    # a generative model. Nothing contacts Ollama until generation is enabled and
+    # an /v1/answer request is made.
+    generation_enabled: bool = False
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    # A lightweight, configurable model. Nothing here downloads a model and no
+    # particular model is assumed; select among the models already installed.
+    ollama_model: str = "qwen2.5:1.5b-instruct"
+    ollama_timeout_s: float = Field(default=120.0, gt=0, le=3600)
+    ollama_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
+    ollama_num_predict: int = Field(default=512, ge=1, le=8192)
+    # Only loopback inference is permitted by default; a remote Ollama endpoint
+    # requires a deliberate opt-in (trust boundary, Phase 5 §8).
+    ollama_allow_remote: bool = False
+    # Bounded evidence selection for one answer (Phase 5 §4/§9).
+    answer_max_evidence: int = Field(default=6, ge=1, le=50)
+    answer_context_tokens: int = Field(default=2048, ge=128, le=32768)
+    recorded_answers_dir: Path = Field(
+        default_factory=lambda: find_repo_root() / "benchmarks" / "recorded_answers"
+    )
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

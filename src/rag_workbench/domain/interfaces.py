@@ -19,6 +19,8 @@ from rag_workbench.config import ChunkerConfig
 from rag_workbench.domain.schemas import (
     ChunkData,
     EmbeddingBatch,
+    GenerationRequest,
+    GenerationResult,
     ParsedDocument,
     RerankBatch,
     SearchHit,
@@ -151,7 +153,28 @@ class Reranker(Protocol):
     def score(self, query: str, passages: Sequence[str]) -> RerankBatch: ...
 
 
+@runtime_checkable
+class AnswerGenerator(Protocol):
+    """Produce a grounded, structured answer from trusted instructions and evidence.
+
+    Implementations may be lazy and must not be contacted until generation is
+    actually requested. ``generate`` returns a :class:`GenerationResult` that
+    carries the parsed payload (or ``None`` plus an ``error`` when the model's
+    output could not be recovered) together with model metadata and timings;
+    failures never raise out of a well-behaved call except for an *unavailable*
+    generator, which raises :class:`~rag_workbench.domain.errors.GeneratorUnavailableError`.
+    """
+
+    @property
+    def model_id(self) -> str: ...
+
+    def ensure_available(self) -> None: ...
+
+    def generate(self, request: GenerationRequest) -> GenerationResult: ...
+
+
 __all__ = [
+    "AnswerGenerator",
     "Chunker",
     "DocumentParser",
     "EmbeddingProvider",

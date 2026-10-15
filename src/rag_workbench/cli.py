@@ -33,12 +33,33 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
-from rag_workbench.config import IndexProfileSpec, Settings, get_settings
-from rag_workbench.domain.errors import RagWorkbenchError
+from rag_workbench.answering.pipeline import AnswerService
+from rag_workbench.answering.quality import (
+    AnswerQualityRunner,
+    load_answer_quality_dataset,
+)
+from rag_workbench.answering.recorded import (
+    DEMO_SCHEMA_VERSION,
+    answer_demo_summary,
+    find_answer_demo,
+    load_answer_demos,
+    new_demo_id,
+    write_answer_demo,
+    write_quality_report,
+)
+from rag_workbench.config import IndexProfileSpec, Settings, find_repo_root, get_settings
+from rag_workbench.domain.errors import (
+    AnswerNotFoundError,
+    GeneratorUnavailableError,
+    RagWorkbenchError,
+)
+from rag_workbench.domain.schemas import AnswerResponse
 from rag_workbench.evaluation.experiments import compact_record
 from rag_workbench.evaluation.runner import EvalRunConfig
+from rag_workbench.evaluation.runtime import git_commit, runtime_environment
 from rag_workbench.evaluation.service import EvaluationService
 from rag_workbench.ingestion.pipeline import IngestionService
 from rag_workbench.ingestion.profiles import build_profile
@@ -255,6 +276,76 @@ def _build_parser() -> argparse.ArgumentParser:
         "--full",
         action="store_true",
         help="write the complete record (large); default trims per-query traces",
+    )
+
+    # ---------------------------------------------------------------- answering
+    answer = sub.add_parser(
+        "answer", help="optional grounded answer generation, demos and quality"
+    )
+    answer_sub = answer.add_subparsers(dest="answer_command", required=True)
+
+    answer_ask = answer_sub.add_parser("ask", help="generate a grounded answer locally")
+    answer_ask.add_argument("question")
+    answer_ask.add_argument("--profile", default=None, help="index profile ID")
+    answer_ask.add_argument("--collection", default=None)
+    answer_ask.add_argument("--mode", choices=["bm25", "dense", "hybrid"], default="bm25")
+    answer_ask.add_argument("--query-mode", choices=["and", "or"], default="and")
+    answer_ask.add_argument("--candidate-depth", type=int, default=None)
+    answer_ask.add_argument("--candidates", type=int, default=None)
+    answer_ask.add_argument("--rerank", action="store_true")
+    answer_ask.add_argument("--reranker-model", default=None)
+    answer_ask.add_argument("--rerank-candidates", type=int, default=None)
+    answer_ask.add_argument("--max-evidence", type=int, default=None)
+    answer_ask.add_argument("--context-tokens", type=int, default=None)
+    answer_ask.add_argument("--temperature", type=float, default=None)
+    answer_ask.add_argument("--num-predict", type=int, default=None)
+    answer_ask.add_argument("--json", action="store_true")
+
+    answer_demos = answer_sub.add_parser("demos", help="list recorded answer demonstrations")
+    answer_demos.add_argument("--json", action="store_true")
+
+    answer_demo = answer_sub.add_parser("demo", help="show one recorded answer demonstration")
+    answer_demo.add_argument("demo_id")
+
+    answer_quality = answer_sub.add_parser(
+        "quality", help="run the grounded-answer quality set"
+    )
+    answer_quality.add_argument(
+        "--dataset", default="answer-quality/legal-contracts-answers"
+    )
+    answer_quality.add_argument("--profile", required=True)
+    answer_quality.add_argument(
+        "--mode", choices=["bm25", "dense", "hybrid"], default="bm25"
+    )
+    answer_quality.add_argument("--query-mode", choices=["and", "or"], default="and")
+    answer_quality.add_argument("--candidate-depth", type=int, default=None)
+    answer_quality.add_argument("--rerank", action="store_true")
+    answer_quality.add_argument("--rerank-candidates", type=int, default=None)
+    answer_quality.add_argument("--max-evidence", type=int, default=None)
+    answer_quality.add_argument("--context-tokens", type=int, default=None)
+    answer_quality.add_argument("--label", default=None)
+    answer_quality.add_argument("--out", type=Path, default=None)
+
+    answer_record = answer_sub.add_parser(
+        "record", help="record answer demos and a quality report as artifacts"
+    )
+    answer_record.add_argument(
+        "--dataset", default="answer-quality/legal-contracts-answers"
+    )
+    answer_record.add_argument("--profile", required=True)
+    answer_record.add_argument(
+        "--mode", choices=["bm25", "dense", "hybrid"], default="bm25"
+    )
+    answer_record.add_argument("--query-mode", choices=["and", "or"], default="and")
+    answer_record.add_argument("--candidate-depth", type=int, default=None)
+    answer_record.add_argument("--rerank", action="store_true")
+    answer_record.add_argument("--rerank-candidates", type=int, default=None)
+    answer_record.add_argument("--max-evidence", type=int, default=None)
+    answer_record.add_argument("--context-tokens", type=int, default=None)
+    answer_record.add_argument("--label", default=None)
+    answer_record.add_argument("--directory", type=Path, default=None)
+    answer_record.add_argument(
+        "--no-demos", action="store_true", help="write only the aggregate quality report"
     )
 
     return parser
@@ -690,6 +781,226 @@ def _cmd_eval(settings: Settings, database: Database, args: argparse.Namespace) 
     raise RagWorkbenchError(f"unknown eval command: {command}", code="cli_error")
 
 
+def _answer_service(settings: Settings, database: Database) -> AnswerService:
+    return AnswerService(database, settings, SearchService(database, settings))
+
+
+def _answer_quality_dataset_path(settings: Settings, name: str) -> Path:
+    candidate = Path(name)
+    if candidate.is_file():
+        return candidate
+    bundled = settings.bundled_datasets_dir / f"{name}.json"
+    if bundled.is_file():
+        return bundled
+    raise RagWorkbenchError(
+        f"answer-quality dataset not found: {name}", code="dataset_not_found"
+    )
+
+
+def _require_generation(settings: Settings) -> None:
+    if not settings.generation_enabled:
+        raise GeneratorUnavailableError(
+            "live answer generation is disabled; set "
+            "RAG_WORKBENCH_GENERATION_ENABLED=true and run Ollama to enable it"
+        )
+
+
+def _format_answer(response: AnswerResponse) -> str:
+    lines = [f"status  : {response.status}", f"question: {response.question}"]
+    if response.answer:
+        lines.append("answer  :")
+        lines.extend(f"  {line}" for line in response.answer.splitlines())
+    if response.reason:
+        lines.append(f"reason  : {response.reason}")
+    if response.claims:
+        lines.append("claims  :")
+        for index, claim in enumerate(response.claims, 1):
+            cites = " ".join(f"[{c}]" for c in claim.citations) or "(no citation)"
+            lines.append(f"  {index}. {claim.text}  {cites}")
+    if response.unanswered:
+        lines.append("unanswered: " + "; ".join(response.unanswered))
+    validation = response.citation_validation
+    lines.append(
+        f"citation: structural={validation.structural_valid} "
+        f"valid={validation.citation_valid} "
+        f"unknown={validation.unknown_source_ids} "
+        f"semantic={validation.semantic_support}"
+    )
+    context = response.context
+    lines.append(
+        f"context : retrieved={context.retrieved} selected={context.selected} "
+        f"excluded={len(response.excluded_evidence)} "
+        f"tokens~{context.token_estimate}/{context.token_budget} ({context.token_count_method})"
+    )
+    lines.append(
+        "evidence: "
+        + ", ".join(
+            f"[{item.source_id}] {item.source_name}"
+            + (f" #{item.section_number}" if item.section_number else "")
+            for item in response.evidence
+        )
+    )
+    lines.append(f"timings : {response.timings_ms}")
+    if response.diagnostics:
+        lines.append("diagnostics:")
+        lines.extend(f"  {d['code']}: {d['detail']}" for d in response.diagnostics)
+    return "\n".join(lines)
+
+
+def _format_quality_report(report: dict) -> str:
+    lines = [
+        f"answer quality {report['report_id']} "
+        f"({report['dataset']['name']} v{report['dataset']['version']})",
+        f"model  : {report['config'].get('model_id')}",
+        f"counts : {report['counts']}",
+    ]
+    for name in sorted(report["metrics"]):
+        lines.append(f"  {name:<34}: {report['metrics'][name]}")
+    lines.append(
+        f"latency: retrieval={report['latency']['retrieval_ms']['p50']}ms "
+        f"generation={report['latency']['generation_ms']['p50']}ms "
+        f"total={report['latency']['total_ms']['p50']}ms (p50)"
+    )
+    return "\n".join(lines)
+
+
+def _demo_record(
+    *,
+    item,
+    response: AnswerResponse,
+    dataset,
+    run_config: dict,
+    created_at,
+) -> dict:
+    record = response.model_dump()
+    record.update(
+        {
+            "schema_version": DEMO_SCHEMA_VERSION,
+            "kind": "answer_demo",
+            "demo_id": new_demo_id(item.question, created_at=created_at),
+            "created_at": created_at.isoformat(),
+            "source": "recorded",
+            "recorded": True,
+            "dataset": {
+                "name": dataset.name,
+                "version": dataset.version,
+                "collection": dataset.collection,
+            },
+            "run_config": run_config,
+            "expected": {
+                "status": item.expected_status,
+                "reference_answer": item.reference_answer,
+                "reference_keywords": item.reference_keywords,
+                "reference_sections": item.reference_sections,
+                "note": item.note,
+            },
+            "runtime": runtime_environment(),
+            "git_commit": git_commit(find_repo_root()),
+        }
+    )
+    return record
+
+
+def _cmd_answer(settings: Settings, database: Database, args: argparse.Namespace) -> int:
+    command = args.answer_command
+
+    if command == "demos":
+        demos = load_answer_demos(settings.recorded_answers_dir)
+        if args.json:
+            print(json.dumps([answer_demo_summary(d) for d in demos], indent=2))
+            return 0
+        if not demos:
+            print(
+                f"no recorded answer demos in {settings.recorded_answers_dir}",
+                file=sys.stderr,
+            )
+            return 0
+        for demo in demos:
+            summary = answer_demo_summary(demo)
+            print(
+                f"  {summary['demo_id']}  [{summary['status']}]  "
+                f"citation_valid={summary['citation_valid']}  "
+                f"{str(summary['question'])[:80]}"
+            )
+        return 0
+
+    if command == "demo":
+        record = find_answer_demo(settings.recorded_answers_dir, args.demo_id)
+        if record is None:
+            raise AnswerNotFoundError(f"no recorded answer demo with id '{args.demo_id}'")
+        print(json.dumps(record, indent=2))
+        return 0
+
+    if command == "ask":
+        _require_generation(settings)
+        response = _answer_service(settings, database).answer(
+            question=args.question,
+            profile_id=args.profile,
+            mode=args.mode,
+            collection=args.collection,
+            query_mode=args.query_mode,
+            candidate_depth=args.candidate_depth,
+            candidates=args.candidates,
+            rerank=args.rerank,
+            reranker_model=args.reranker_model,
+            rerank_candidates=args.rerank_candidates,
+            max_evidence=args.max_evidence,
+            context_tokens=args.context_tokens,
+            temperature=args.temperature,
+            num_predict=args.num_predict,
+        )
+        if args.json:
+            print(response.model_dump_json(indent=2))
+            return 0
+        print(_format_answer(response))
+        return 0
+
+    if command in {"quality", "record"}:
+        _require_generation(settings)
+        dataset = load_answer_quality_dataset(
+            _answer_quality_dataset_path(settings, args.dataset)
+        )
+        runner = AnswerQualityRunner(_answer_service(settings, database))
+        report, responses = runner.run_with_responses(
+            dataset,
+            profile_id=args.profile,
+            mode=args.mode,
+            query_mode=args.query_mode,
+            candidate_depth=args.candidate_depth,
+            rerank=args.rerank,
+            rerank_candidates=args.rerank_candidates,
+            max_evidence=args.max_evidence,
+            context_tokens=args.context_tokens,
+            label=args.label,
+        )
+        if command == "quality":
+            if args.out is not None:
+                args.out.write_text(json.dumps(report, indent=2), encoding="utf-8")
+                print(f"wrote {args.out}")
+            print(_format_quality_report(report))
+            return 0
+
+        directory = args.directory or settings.recorded_answers_dir
+        run_config = report["config"]
+        created_at = datetime.now(UTC)
+        if not args.no_demos:
+            for item, response in responses:
+                record = _demo_record(
+                    item=item,
+                    response=response,
+                    dataset=dataset,
+                    run_config=run_config,
+                    created_at=created_at,
+                )
+                path = write_answer_demo(directory, record)
+                print(f"recorded demo {record['demo_id']} -> {path.name}")
+        path = write_quality_report(directory, report)
+        print(f"recorded quality report {report['report_id']} -> {path.name}")
+        return 0
+
+    raise RagWorkbenchError(f"unknown answer command: {command}", code="cli_error")
+
+
 def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -738,6 +1049,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_datasets(settings, database, args)
         if args.command == "eval":
             return _cmd_eval(settings, database, args)
+        if args.command == "answer":
+            return _cmd_answer(settings, database, args)
         parser.error(f"unknown command: {args.command}")
         return 2
     except RagWorkbenchError as exc:

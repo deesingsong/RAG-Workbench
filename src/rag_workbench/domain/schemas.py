@@ -283,3 +283,178 @@ class ProfileRecord(BaseModel):
     index_version: str
     created_at: datetime
     chunk_count: int
+
+
+# ------------------------------------------------------- answer generation (§8)
+
+#: The explicit states a generated answer may take. ``insufficient_evidence`` is
+#: a first-class outcome, not a failure: the model is allowed to abstain.
+AnswerStatus = Literal[
+    "answered",
+    "partially_answered",
+    "insufficient_evidence",
+    "generation_error",
+]
+
+
+class EvidenceItem(BaseModel):
+    """One passage selected into the model context, with a request-scoped id.
+
+    ``source_id`` is the ``[S1]``/``[S2]`` identifier the model must cite; it maps
+    to exactly one chunk returned by the retrieval service. ``text`` is the
+    passage verbatim — never paraphrased, never invented.
+    """
+
+    source_id: str
+    chunk_id: str
+    document_id: str
+    source_name: str
+    collection: str | None = None
+    section_path: str | None = None
+    section_number: str | None = None
+    section_title: str | None = None
+    page_start: int | None = None
+    page_end: int | None = None
+    rank: int
+    score: float
+    score_kind: str = "bm25"
+    text: str
+    token_estimate: int = 0
+
+
+class ExcludedEvidence(BaseModel):
+    """A retrieved candidate that was not selected, and exactly why."""
+
+    chunk_id: str
+    source_name: str
+    rank: int
+    reason: Literal["duplicate", "overlap", "max_evidence", "context_budget"]
+    detail: str = ""
+
+
+class Claim(BaseModel):
+    """One factual claim and the source ids the model cited for it."""
+
+    text: str
+    citations: list[str] = Field(default_factory=list)
+
+
+class AnswerPayload(BaseModel):
+    """The structured output the generator must produce (the LLM output schema).
+
+    It carries no numerical confidence: retrieval scores and reranker logits are
+    not probabilities of factual correctness and are never requested here.
+    """
+
+    status: AnswerStatus
+    answer: str = ""
+    claims: list[Claim] = Field(default_factory=list)
+    unanswered: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class GenerationConfig(BaseModel):
+    """Generation parameters for one request (distinct from retrieval config)."""
+
+    model: str
+    temperature: float = 0.1
+    num_predict: int = 512
+    timeout_s: float = 120.0
+    seed: int | None = None
+
+
+class GenerationRequest(BaseModel):
+    """Everything the generator needs: trusted instructions, question, evidence."""
+
+    instructions: str
+    question: str
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    config: GenerationConfig
+    response_schema: dict[str, object] = Field(default_factory=dict)
+
+
+class GenerationResult(BaseModel):
+    """A generation outcome, including timing, token usage and failure detail."""
+
+    model_id: str
+    payload: AnswerPayload | None = None
+    raw_text: str = ""
+    structured: bool = True
+    done_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    timings_ms: dict[str, float] = Field(default_factory=dict)
+    error: str | None = None
+    diagnostics: list[str] = Field(default_factory=list)
+
+
+class CitationIssue(BaseModel):
+    code: str
+    detail: str
+    claim_index: int | None = None
+    source_id: str | None = None
+
+
+class CitationValidation(BaseModel):
+    """Deterministic citation checks. Three properties are kept strictly apart:
+
+    * ``structural_valid``  — the output conformed to the answer schema;
+    * ``citation_valid``    — every cited id maps to a real selected passage, and
+      every evidence-supported answer has at least one citation;
+    * ``semantic_support``  — whether the cited passage *actually supports* the
+      claim. This is **not** deterministically verifiable and is always reported
+      as ``not_determined`` here; it requires separate evaluation or human review.
+    """
+
+    structural_valid: bool
+    citation_valid: bool
+    semantic_support: str = "not_determined"
+    cited_source_ids: list[str] = Field(default_factory=list)
+    known_source_ids: list[str] = Field(default_factory=list)
+    unknown_source_ids: list[str] = Field(default_factory=list)
+    uncited_claim_indices: list[int] = Field(default_factory=list)
+    issues: list[CitationIssue] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ContextDiagnostics(BaseModel):
+    """What evidence selection did: retrieved vs selected vs excluded."""
+
+    retrieved: int
+    selected: int
+    duplicates_removed: int = 0
+    overlaps_removed: int = 0
+    excluded_by_budget: int = 0
+    excluded_by_max: int = 0
+    token_estimate: int = 0
+    token_budget: int = 0
+    token_count_method: str = "estimated"
+    notes: list[str] = Field(default_factory=list)
+
+
+class AnswerResponse(BaseModel):
+    """The complete answer record: answer, evidence, validation and diagnostics.
+
+    ``evidence`` is the *selected context* (what the model saw); ``retrieved_hits``
+    is the *full retrieval* (what was available, and could have been excluded).
+    They are deliberately separate so a reader can tell whether evidence was never
+    retrieved versus retrieved-but-excluded.
+    """
+
+    question: str
+    status: AnswerStatus
+    answer: str = ""
+    claims: list[Claim] = Field(default_factory=list)
+    unanswered: list[str] = Field(default_factory=list)
+    reason: str | None = None
+    evidence: list[EvidenceItem] = Field(default_factory=list)
+    excluded_evidence: list[ExcludedEvidence] = Field(default_factory=list)
+    retrieved_hits: list[SearchHit] = Field(default_factory=list)
+    citation_validation: CitationValidation
+    context: ContextDiagnostics
+    retrieval: dict[str, object] = Field(default_factory=dict)
+    generation: dict[str, object] = Field(default_factory=dict)
+    timings_ms: dict[str, float] = Field(default_factory=dict)
+    diagnostics: list[dict[str, str]] = Field(default_factory=list)
+    generator_available: bool = False
+    recorded: bool = False

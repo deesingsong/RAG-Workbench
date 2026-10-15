@@ -44,6 +44,62 @@ class SearchRequest(BaseModel):
     rerank_candidates: int | None = Field(default=None, ge=1, le=500)
 
 
+class AnswerRequest(BaseModel):
+    """A grounded-answer request: retrieval config plus generation bounds.
+
+    ``candidate_depth`` (first-stage pool) and ``max_evidence`` (how many passages
+    reach the model) are deliberately separate, so context selection can be
+    inspected independently of retrieval depth.
+    """
+
+    question: str = Field(min_length=1, max_length=2000)
+    profile_id: str | None = None
+    mode: str = "bm25"
+    collection: str | None = None
+    query_mode: str = "and"
+    candidate_depth: int | None = Field(default=None, ge=1, le=100)
+    candidates: int | None = Field(default=None, ge=1, le=500)
+    rerank: bool = False
+    reranker_model: str | None = Field(default=None, max_length=200)
+    rerank_candidates: int | None = Field(default=None, ge=1, le=500)
+    max_evidence: int | None = Field(default=None, ge=1, le=50)
+    context_tokens: int | None = Field(default=None, ge=128, le=32768)
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    num_predict: int | None = Field(default=None, ge=1, le=8192)
+
+
+class AnswerDemoSummary(BaseModel):
+    demo_id: str | None = None
+    created_at: str | None = None
+    source: str = "recorded"
+    question: str | None = None
+    status: str | None = None
+    answer_preview: str | None = None
+    claim_count: int = 0
+    citation_valid: bool | None = None
+    structural_valid: bool | None = None
+    semantic_support: str | None = None
+    evidence_selected: int | None = None
+    evidence_retrieved: int | None = None
+    collection: str | None = None
+    mode: str | None = None
+    model_id: str | None = None
+    total_ms: float | None = None
+    generation_ms: float | None = None
+    diagnostic_codes: list[str] = Field(default_factory=list)
+
+
+class AnswerDemoListResponse(BaseModel):
+    total: int
+    demos: list[AnswerDemoSummary]
+
+
+class AnswerDemoResponse(BaseModel):
+    """An ``answer_demo`` artifact's raw record (already validated on load)."""
+
+    demo: dict
+
+
 class VectorRebuildRequest(BaseModel):
     profile_id: str | None = None
     all_profiles: bool = False
@@ -207,6 +263,14 @@ class AppConfigResponse(BaseModel):
     bundled_datasets_exists: bool = False
     recorded_experiments_dir: str = ""
     recorded_experiments_exists: bool = False
+    generation_enabled: bool = False
+    generation_available: bool = False
+    generation_available_detail: str = ""
+    ollama_model: str = ""
+    ollama_base_url: str = ""
+    recorded_answer_demos: int = 0
+    recorded_answers_dir: str = ""
+    recorded_answers_exists: bool = False
 
 
 __all__ = [

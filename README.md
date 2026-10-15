@@ -71,6 +71,14 @@ for anything documented below.
 - **Read-only deployment mode** for the public demo: the backend refuses every
   mutating endpoint and serves the bundled datasets plus committed experiment
   artifacts, so the live app shows real recorded results without mutable state.
+- **Optional evidence-grounded answers** (Phase 5) over the retrieved passages,
+  using a **local Ollama** model: a strict JSON answer schema, a fixed trusted
+  instruction block kept separate from the untrusted passages, **deterministic
+  citation verification**, first-class `insufficient_evidence` and
+  `generation_error` states, and *retrieved* vs *selected* context kept distinct.
+  Generation is refused in read-only mode and when it is disabled, so the public
+  demo — which serves **recorded** answer runs and a grounded-answer quality
+  report — never becomes a model endpoint.
 - **FastAPI** endpoints with typed Pydantic contracts and OpenAPI docs, a
   **CLI**, and a **Streamlit** client that talks to the API over HTTP only.
 
@@ -87,8 +95,11 @@ for anything documented below.
 **BM25-only use needs no model, no download and no network.** Dense and hybrid
 retrieval need the optional `dense` extra (§3) and download the embedding model
 once (about 90 MB). **Cross-encoder reranking** needs the same `dense` extra and
-downloads the reranker model once on first use (about 90 MB). No Docker, cloud
-account, API key, GPU or Ollama is needed.
+downloads the reranker model once on first use (about 90 MB). **Answer generation**
+(Phase 5) is optional and needs a **separately installed local Ollama** with one
+model pulled or imported; with no Ollama the rest of the project is unaffected.
+The core install, the tests and the default demo need no Docker, cloud account,
+API key or GPU.
 
 ---
 
@@ -115,6 +126,32 @@ uv run rag-workbench init-db
 `uv sync` creates an isolated `.venv` from `pyproject.toml` / `uv.lock`. The core
 install deliberately excludes deep-learning packages so that BM25 and the test
 suite stay light and offline.
+
+### Optional: enable answer generation (Phase 5)
+
+Generation is off by default. To turn it on you need a **local** Ollama serving one
+model. Install Ollama from https://ollama.com/download (a signed Windows installer),
+then either pull a model or *import* an existing GGUF without downloading it:
+
+```powershell
+# Option A: pull a small model (network, ~1 GB)
+ollama pull qwen2.5:1.5b-instruct
+
+# Option B: import a GGUF you already have (no download)
+#   create a Modelfile whose first line is:  FROM C:\path\to\model.gguf
+ollama create qwen2.5:1.5b-instruct -f .\Modelfile
+
+# Start the server if it is not already running
+ollama serve
+
+# Point RAG Workbench at it and enable generation
+$env:RAG_WORKBENCH_GENERATION_ENABLED = "true"
+$env:RAG_WORKBENCH_OLLAMA_MODEL = "qwen2.5:1.5b-instruct"
+```
+
+Only a **loopback** Ollama endpoint is accepted by default; a remote base URL
+requires the explicit `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE=true` opt-in. Nothing is
+downloaded at app start-up.
 
 ---
 
@@ -225,6 +262,31 @@ Example rerank output (real cross-encoder, clause-aware profile, see §13):
   #3 rerank=1.919  ... 3.3(b) Return of Materials     [retrieval_rank=2 movement=-1]
 ```
 
+### Answer from the CLI (optional, needs local Ollama)
+
+```powershell
+# Generate a grounded answer locally (requires RAG_WORKBENCH_GENERATION_ENABLED=true)
+uv run rag-workbench answer ask "What is the notice period for termination?" `
+  --collection legal-contracts --query-mode or --max-evidence 4
+
+# Run the bundled grounded-answer quality set and print the metrics
+uv run rag-workbench answer quality `
+  --profile <profile-id> --dataset answer-quality/legal-contracts-answers
+
+# Record answer demos + a quality report as committed read-only artifacts
+uv run rag-workbench answer record `
+  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
+  --query-mode or --max-evidence 4 --label "bm25 / qwen2.5:1.5b-instruct"
+
+# Inspect recorded demos with no model running
+uv run rag-workbench answer demos
+uv run rag-workbench answer demo <demo-id>
+```
+
+Answer artifacts live in `benchmarks/recorded_answers/`: one `answer_demo` JSON per
+question plus one `answer_quality` report. Both carry `source="recorded"` so the
+public demo can never present them as live inference.
+
 ### Try a PDF
 
 ```powershell
@@ -246,8 +308,11 @@ Cloud runs one Streamlit process and cannot run a separate FastAPI process:
   The backend then refuses every mutating endpoint with `403 read_only_mode`,
   while a trusted internal startup hook seeds the bundled sample contract so a
   fresh instance still has something to search. The **Evaluation Lab**,
-  **Failure Explorer** and **Performance Lab** show the committed datasets under
-  `datasets/` and the committed experiment artifacts under `benchmarks/recorded/`.
+  **Failure Explorer**, **Performance Lab** and **Answer Laboratory** show the
+  committed datasets under `datasets/` and the committed artifacts under
+  `benchmarks/recorded/` and `benchmarks/recorded_answers/`. In read-only mode the
+  answer endpoints are refused, so the app is never a model endpoint; live
+  generation additionally requires `RAG_WORKBENCH_GENERATION_ENABLED=true`.
 - The **Deployment diagnostics** expander on the Evaluation Lab reports the
   backend `version` and its separate build `revision` (plus how it was resolved:
   `git`, `git-file` or `source-hash`) and compares the revision to the source
@@ -329,6 +394,16 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_RECORDED_EXPERIMENTS_DIR` | `benchmarks/recorded` | Committed experiment artifacts shown by a read-only deployment. |
 | `RAG_WORKBENCH_READ_ONLY` | `false` | Refuse every mutating endpoint (`403 read_only_mode`). |
 | `RAG_WORKBENCH_AUTOSEED_SAMPLE` | `false` | Trusted startup bootstrap that seeds the sample corpus once (for a fresh read-only instance). |
+| `RAG_WORKBENCH_GENERATION_ENABLED` | `false` | Master switch for live answer generation (`POST /v1/answer`). Off by default; the public demo leaves it off. |
+| `RAG_WORKBENCH_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama endpoint. Only loopback is accepted unless remote is opted in. |
+| `RAG_WORKBENCH_OLLAMA_MODEL` | `qwen2.5:1.5b-instruct` | Model name to request. Never downloaded by the app. |
+| `RAG_WORKBENCH_OLLAMA_TIMEOUT_S` | `120` | Per-request generation timeout. |
+| `RAG_WORKBENCH_OLLAMA_TEMPERATURE` | `0.1` | Sampling temperature. |
+| `RAG_WORKBENCH_OLLAMA_NUM_PREDICT` | `512` | Maximum tokens to generate. |
+| `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE` | `false` | Explicit opt-in to a non-loopback Ollama endpoint. |
+| `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
+| `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
+| `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality report for the read-only demo. |
 
 ---
 
@@ -468,17 +543,33 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/experiments/{id}` | Full experiment record with per-query outcomes and traces. |
 | `GET` | `/v1/experiments/{id}/queries/{query_id}` | One query's metrics, diagnostics and ranked trace. |
 | `GET` | `/v1/experiments/{id}/export?format=json\|csv` | Download a full JSON record or a per-query CSV. |
+| `POST` | `/v1/answer` | `{question, profile_id?, mode?, collection?, query_mode?, candidate_depth?, max_evidence?, context_tokens?, temperature?, num_predict?, rerank?}` → grounded answer with selected evidence, citation verification and diagnostics. Needs `RAG_WORKBENCH_GENERATION_ENABLED=true` and a non-read-only deployment. |
+| `GET` | `/v1/answer-demos` | List recorded answer demonstrations (used by the read-only demo). |
+| `GET` | `/v1/answer-demos/{id}` | One recorded answer demonstration. |
+| `GET` | `/v1/answer-quality` | The newest recorded grounded-answer quality report. |
 
 `mode` accepts `bm25`, `dense` and `hybrid`. `query_mode` accepts `and` (the
 interactive default, every term must appear) and `or` (any term; BM25 ranks,
 which is what natural-language and benchmark queries need). Errors are
 actionable: `415`
 unsupported type, `413` too large, `400` parse or search failure, `404` missing
-document/profile/dataset/experiment, `422` invalid query/config/unsupported mode,
-`403 read_only_mode` for any mutation in a read-only deployment, `503` dense or
-reranker dependencies being unavailable (`dense_unavailable`,
-`vector_index_not_built`, `reranker_unavailable`). Body shape:
+document/profile/dataset/experiment (`404 answer_not_found` for a missing answer
+demo or quality report), `422` invalid query/config/unsupported mode,
+`403 read_only_mode` for any mutation — including live generation — in a
+read-only deployment, `503` dense, reranker or generation dependencies being
+unavailable (`dense_unavailable`, `vector_index_not_built`,
+`reranker_unavailable`, `generator_unavailable` when generation is disabled or
+Ollama/the model is unreachable), and `400 generation_error` for a generation
+that ran but produced no usable structured answer. Body shape:
 `{"error": "<code>", "message": "<text>"}`.
+
+`POST /v1/answer` is deliberately layered: `candidate_depth` controls the
+first-stage retrieval pool, `max_evidence` controls how many passages reach the
+model, and `context_tokens` bounds the evidence block. The response always keeps
+the **retrieved** hits and the **selected** evidence separate, reports
+`insufficient_evidence` as a first-class outcome (not an error), and returns
+`generation_error` rather than raising when the model times out or returns
+malformed output.
 
 Reranking is optional and off by default. The evaluation runner keeps four
 quantities explicit and consistent: the **first-stage candidate depth**
@@ -510,6 +601,7 @@ uv run ruff check .
 uv run pytest                 # core suite; dense/real-model tests are deselected
 uv run pytest -m dense -s     # opt-in: real Sentence Transformers smoke test
 uv run pytest -m reranker -s  # opt-in: real cross-encoder reranker smoke test
+uv run pytest -m ollama -s    # opt-in: real local-Ollama generation smoke test
 ```
 
 The core suite is deterministic and runs **offline** with no model downloads. The
@@ -542,11 +634,27 @@ real RRF implementation:
   end-to-end over real SQLite/BM25; experiment persistence plus JSON/CSV export
   round-trips; and the evaluation API and read-only enforcement (a mutating
   endpoint returns `403 read_only_mode`).
+- **Answer (Phase 5):** context selection (sequential `[S#]` ids, duplicate and
+  containment de-duplication, `max_evidence` and token-budget exclusion with an
+  explicit reason for every dropped passage); deterministic citation verification
+  (unknown ids, uncited claims, `answered`-without-citations, and the
+  semantic-support property always reported `not_determined`); the prompt trust
+  boundary (retrieved text appears only in the delimited user message, never in
+  the trusted system instructions); the Ollama adapter over an in-memory HTTP
+  transport (model listing, availability, schema-valid parsing, code-fence
+  recovery, malformed / HTTP-error / timeout error results, and remote-endpoint
+  refusal); the recorded-artifact loader; the grounded-answer quality runner; and
+  the API — grounded answer, unknown-citation flagging, `generation_error`,
+  `503` when generation is disabled or unavailable, `403 read_only_mode`,
+  empty-evidence abstention, and the recorded demos / quality endpoints.
 - **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
   profile for the sample contract and returns the expected top clause.
 - **Reranker (opt-in, `-m reranker`):** the real
   `cross-encoder/ms-marco-MiniLM-L6-v2` model reranks a real candidate list,
   keeping retrieval and rerank scores separate and reporting its own timings.
+- **Ollama (opt-in, `-m ollama`):** the real local model answers a question over a
+  real ingested contract and the reply passes structural and citation verification
+  (skipped when Ollama or the model is unavailable).
 
 Run the tests to see the current numbers on your machine; this README does not
 pin a pass count.
@@ -633,9 +741,19 @@ notice. Character counts are never used as token counts.
   destructive or type-changing migrations are not yet handled (no Alembic).
 - **Uploads are processed in memory** up to the size limit; there is no
   streaming ingest path yet.
-- **No answer generation yet.** Retrieval, reranking and evaluation are
-  implemented; LLM answer synthesis with citations is a later phase.
-  `/v1/search` rejects unknown `mode` values with a clear message rather than
+- **Optional answer generation is local, small and non-deterministic.** Live
+  generation needs a separately installed Ollama; the app never downloads a model.
+  Answers come from the configured local model and are **not** guaranteed correct:
+  the pipeline verifies *structure* and *citation ids* deterministically but cannot
+  verify that a cited passage *semantically supports* a claim, so
+  `semantic_support` is always reported as `not_determined`. A small model can
+  answer a question the passages do not support (see §16), add unsupported claims,
+  or — as observed with 1.5B Qwen — fail citation-id formatting unless the output
+  schema constrains it (the schema now uses a `pattern` so decoding emits `S#`).
+  Generation is refused in read-only mode and when disabled, so the public demo is
+  not a model endpoint. Prompt-based defences reduce, but do not eliminate,
+  prompt-injection risk from retrieved text.
+- `/v1/search` rejects unknown `mode` values with a clear message rather than
   pretending to support them.
 - **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
   **stored datasets** with explicit relevance judgments; they are not a
@@ -667,11 +785,15 @@ src/rag_workbench/
   ingestion/           parsers, chunkers (incl. clause-aware), pipeline, vector indexer
   retrieval/           BM25, dense, hybrid (RRF), retrieval service (+ rerank stage)
   evaluation/          metrics, datasets, diagnostics, runner, experiments, service
+  answering/           context selection, prompt trust boundary, Ollama adapter,
+                       citation verification, pipeline, quality eval, recorded artifacts
   api/                 FastAPI factory, dependencies, routes
 ui/streamlit_app.py    Thin HTTP client
 ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
-datasets/              Committed evaluation datasets (bundled legal-contracts)
+datasets/              Committed evaluation datasets (bundled legal-contracts,
+                       answer-quality set)
 benchmarks/recorded/   Committed experiment artifacts for the read-only demo
+benchmarks/recorded_answers/  Committed recorded answer demos + quality report
 tests/                 unit + integration tests, tiny redistributable fixtures
 .github/workflows/ci.yml
 ```
@@ -691,8 +813,13 @@ tests/                 unit + integration tests, tiny redistributable fixtures
   persisted experiments with JSON/CSV export, the Evaluation Lab / Failure
   Explorer / Performance Lab, a read-only demo mode over committed artifacts, and
   a corrected matched reranking comparison (§15).
-- **Phase 5:** optional Ollama answer generation with validated, inspectable
-  citations and abstention; portfolio polish and the scaling-to-10M design.
+- **Phase 5 (done):** optional local Ollama answer generation over the retrieved
+  passages, with a strict answer schema, a prompt trust boundary, deterministic
+  citation verification, first-class `insufficient_evidence` / `generation_error`
+  states, retrieved-vs-selected context, an **Answer Laboratory** UI page, a CLI
+  `answer` command group, a committed grounded-answer quality set and report, and
+  recorded answer artifacts for the read-only demo.
+- **Later:** portfolio polish and the scaling-to-10M design.
 
 ---
 
@@ -837,6 +964,74 @@ chunk, so FTS5's implicit conjunction collapses to near-zero recall. This is a
 property of this lexical stack, reported rather than hidden; the interactive
 default stays `and` for backward-compatible exact-phrase behaviour, and
 evaluation defaults to `or`.
+
+---
+
+## 16. Observed Phase 5 results (grounded answers)
+
+**This section reports a run actually performed on this machine.** Generation uses
+a *local* model served by Ollama; it is a single-machine smoke observation, not a
+model benchmark, and every number depends on the chosen model.
+
+Setup:
+
+- Model: `qwen2.5:1.5b-instruct`, **imported into Ollama from an existing GGUF file**
+  — no model was downloaded for this run. Ollama 0.11.x, CPU inference.
+- Corpus: the bundled synthetic `legal-contracts` set (7 contracts), ingested with
+  the `clause_aware` profile `p-2c8893ea8e1621ef`.
+- Retrieval: BM25, `query_mode=or`, candidate pool 20, `max_evidence=4`,
+  `context_tokens=2048`. The committed report records the exact configuration it
+  ran with.
+
+### Grounded-answer quality (`datasets/answer-quality/legal-contracts-answers.json`)
+
+Ten questions: seven fully answerable, one partially answerable and two
+unanswerable (one answer is absent from the corpus, one from the specific
+contract). The committed report is `benchmarks/recorded_answers/aq-*.json`.
+
+| Metric | Value |
+|---|---|
+| structural validity (schema-valid output) | 1.00 |
+| citation validity (cited ids resolve to selected passages) | 0.90 |
+| invalid-citation rate | 0.00 |
+| reference evidence selected into context | 1.00 |
+| **correct abstention on the unanswerable questions** | **0.00** |
+| over-abstention on answerable questions | 0.00 |
+| generation failures | 0.00 |
+| semantic support | *not determined* |
+
+What this honestly shows:
+
+- **Structural and citation verification work.** Every output satisfied the JSON
+  schema, and 9 of 10 answers cited only passage ids that really were selected. The
+  one invalid-citation case is reported as `citation_valid=false` with the exact
+  unknown id, not hidden.
+- **A small model does not reliably abstain.** Both unanswerable questions were
+  answered anyway (`correct_abstention_rate = 0.00`). Retrieval returned candidate
+  passages — so the model had *something* to work with — but none contained the
+  answer, and the model produced a cited-looking answer regardless. This is exactly
+  the grounding failure the abstention and `semantic_support = not_determined`
+  signals exist to surface: the pipeline never claims such an answer is supported.
+- **Semantic support is not asserted here.** Whether a cited passage truly supports
+  each claim needs human review and is reported as `not_determined` throughout.
+- **Schema detail matters for small models.** Runs whose citation schema had no
+  `pattern` produced `citations` containing file names or section titles
+  (e.g. `[1](saas-03.txt)`) instead of `S#` ids; the deterministic verifier flagged
+  every one. Constraining the citation schema with a `pattern` so decoding emits
+  `S#` moved citation validity to 0.90. Reported as a reproducible observation
+  about small-model format compliance, not a general claim.
+
+### Latency (same run, single machine, CPU)
+
+| Stage | p50 |
+|---|---|
+| retrieval (BM25, 20-candidate pool) | ~28 ms |
+| generation (1.5B, Q8, CPU) | ~3.1 s |
+| total per question | ~3.4 s |
+
+First-call latency is higher because the model is loaded on demand. These are the
+values recorded in the committed report; run `rag-workbench answer record` to
+reproduce them with your own model.
 
 ---
 

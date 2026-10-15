@@ -830,6 +830,254 @@ def render_evaluation_lab() -> None:
             st.error(f"Could not load experiment ({status}): {body}")
 
 
+def _fetch_answer_demos() -> list[dict]:
+    status, body = api_get("/v1/answer-demos")
+    if status != 200 or not isinstance(body, dict):
+        return []
+    demos = body.get("demos", [])
+    return demos if isinstance(demos, list) else []
+
+
+def _answer_demo_label(demo: dict) -> str:
+    status = demo.get("status") or "?"
+    question = " ".join((demo.get("question") or "").split())[:70]
+    return f"{status} • {question}"
+
+
+def _render_answer_record(record: dict) -> None:
+    """Render one answer record — live or recorded. Never edits the content."""
+
+    status = record.get("status", "?")
+    if status == "answered":
+        st.success(f"status: {status}")
+    elif status == "partially_answered":
+        st.info(f"status: {status}")
+    elif status == "insufficient_evidence":
+        st.warning(f"status: {status} — grounded abstention")
+    else:
+        st.error(f"status: {status}")
+
+    st.markdown(f"**Question.** {record.get('question', '')}")
+    answer = record.get("answer") or ""
+    if answer:
+        st.markdown("**Answer**")
+        st.write(answer)
+    if record.get("reason"):
+        st.caption(f"reason: {record['reason']}")
+
+    claims = record.get("claims") or []
+    if claims:
+        st.markdown("**Claims and cited passages**")
+        for index, claim in enumerate(claims, 1):
+            cites = " ".join(f"`{c}`" for c in claim.get("citations", []))
+            st.markdown(f"{index}. {claim.get('text', '')}  {cites or '_(no citation)_'}")
+    if record.get("unanswered"):
+        st.markdown("**Unanswered**")
+        for item in record["unanswered"]:
+            st.caption(f"• {item}")
+
+    validation = record.get("citation_validation") or {}
+    st.markdown("**Citation validation** (three distinct properties)")
+    st.caption(
+        f"structural_valid {validation.get('structural_valid')} • "
+        f"citation_valid {validation.get('citation_valid')} • "
+        f"semantic_support {validation.get('semantic_support', 'not_determined')}"
+    )
+    if validation.get("unknown_source_ids"):
+        st.caption(f"unknown citations: {validation['unknown_source_ids']}")
+    if validation.get("uncited_claim_indices"):
+        st.caption(f"uncited claim indices: {validation['uncited_claim_indices']}")
+    for note in validation.get("notes", []):
+        st.caption(f"note: {note}")
+
+    context = record.get("context") or {}
+    st.markdown("**Context: retrieved vs selected vs excluded**")
+    st.caption(
+        f"retrieved {context.get('retrieved')} • selected {context.get('selected')} • "
+        f"excluded {len(record.get('excluded_evidence') or [])} • "
+        f"tokens ~{context.get('token_estimate')}/{context.get('token_budget')} "
+        f"({context.get('token_count_method')})"
+    )
+
+    evidence = record.get("evidence") or []
+    if evidence:
+        with st.expander(f"Selected evidence ({len(evidence)} passages) — verbatim"):
+            for item in evidence:
+                where = item.get("source_name") or ""
+                if item.get("section_number"):
+                    where += f" #{item['section_number']}"
+                elif item.get("section_path"):
+                    where += f" {item['section_path']}"
+                if item.get("page_start") is not None:
+                    where += f" p.{item['page_start']}"
+                st.markdown(f"**{item.get('source_id')}** — {where}")
+                st.write(item.get("text", ""))
+    excluded = record.get("excluded_evidence") or []
+    if excluded:
+        with st.expander(f"Retrieved but excluded ({len(excluded)} passages)"):
+            st.dataframe(
+                [
+                    {
+                        "rank": item.get("rank"),
+                        "source": item.get("source_name"),
+                        "reason": item.get("reason"),
+                        "detail": item.get("detail"),
+                    }
+                    for item in excluded
+                ],
+                hide_index=True,
+            )
+
+    retrieval = record.get("retrieval") or {}
+    generation = record.get("generation") or {}
+    timings = record.get("timings_ms") or {}
+    st.caption(
+        f"retrieval mode {retrieval.get('mode')} ({retrieval.get('query_mode')}) • "
+        f"collection {retrieval.get('collection')} • "
+        f"model {generation.get('model_id')} • attempted {generation.get('attempted')}"
+    )
+    st.caption("timings_ms: " + ", ".join(f"{k}={v}" for k, v in timings.items()))
+
+    diagnostics = record.get("diagnostics") or []
+    if diagnostics:
+        with st.expander(f"Diagnostics ({len(diagnostics)})", expanded=True):
+            for diag in diagnostics:
+                st.warning(f"**{diag.get('code')}** — {diag.get('detail')}")
+
+    if record.get("recorded"):
+        st.caption(
+            "Recorded run: previously executed locally and committed as an artifact. "
+            "It is not live inference."
+        )
+
+
+def _render_answer_quality() -> None:
+    st.subheader("Grounded-answer quality (recorded)")
+    status, report = api_get("/v1/answer-quality")
+    if status != 200 or not isinstance(report, dict):
+        st.caption(
+            "No recorded answer-quality report. Run "
+            "`rag-workbench answer record` locally to produce one."
+        )
+        return
+    metrics = report.get("metrics", {})
+    config = report.get("config", {})
+    dataset = report.get("dataset", {})
+    st.caption(
+        f"{report.get('report_id')} • dataset {dataset.get('name')} "
+        f"v{dataset.get('version')} • model {config.get('model_id')} • "
+        f"mode {config.get('mode')} • query_mode {config.get('query_mode')}"
+    )
+    st.dataframe([report.get("counts", {})], hide_index=True)
+    labels = [
+        ("structural_validity_rate", "structural validity"),
+        ("citation_validity_rate", "citation validity"),
+        ("invalid_citation_rate", "invalid citation rate"),
+        ("correct_abstention_rate", "correct abstention (unanswerable)"),
+        ("over_abstention_rate", "over-abstention (answerable)"),
+        ("reference_evidence_selected_rate", "reference evidence selected"),
+        ("context_exclusion_rate", "context exclusions"),
+        ("generation_failure_rate", "generation failures"),
+    ]
+    st.dataframe(
+        [{"metric": label, "value": metrics.get(key)} for key, label in labels],
+        hide_index=True,
+    )
+    st.caption(
+        f"semantic support: {metrics.get('semantic_support')} — whether a cited "
+        "passage truly supports a claim is not deterministically decidable and is "
+        "not scored."
+    )
+    for item in report.get("limitations", []):
+        st.caption(f"• {item}")
+
+
+def render_answer_lab() -> None:
+    st.header("Answer Laboratory")
+    st.caption(
+        "Optional evidence-grounded answer generation over the retrieved passages, "
+        "with deterministic citation verification. The intended public deployment is "
+        "read-only and serves recorded runs; nothing here uploads documents or calls "
+        "a paid API."
+    )
+    status, cfg = api_get("/v1/config")
+    if status == 200 and isinstance(cfg, dict):
+        st.caption(
+            f"generation_enabled {cfg.get('generation_enabled')} • "
+            f"generation_available {cfg.get('generation_available')} "
+            f"({cfg.get('generation_available_detail')}) • "
+            f"model {cfg.get('ollama_model')} • endpoint {cfg.get('ollama_base_url')} • "
+            f"recorded demos {cfg.get('recorded_answer_demos')}"
+        )
+    st.divider()
+    _render_answer_quality()
+    st.divider()
+
+    if READ_ONLY or not (isinstance(cfg, dict) and cfg.get("generation_enabled")):
+        st.info(
+            "Live generation is disabled on this deployment. The recorded answer "
+            "demonstrations below were produced locally with a real local model and "
+            "committed as artifacts."
+        )
+    else:
+        with st.form("answer-form"):
+            question = st.text_area("Question", height=80)
+            profiles = _profile_options()
+            labels = _profile_labels(profiles)
+            profile_choice = st.selectbox("Index profile", ["(default)"] + list(labels.keys()))
+            columns = st.columns(4)
+            mode = columns[0].selectbox("Mode", ["bm25", "dense", "hybrid"])
+            query_mode = columns[1].selectbox("Query mode", ["and", "or"], index=1)
+            collection = columns[2].text_input("Collection filter", value="")
+            rerank = columns[3].checkbox("Rerank")
+            columns2 = st.columns(4)
+            candidate_depth = columns2[0].number_input("Candidate depth", 1, 100, 10)
+            max_evidence = columns2[1].number_input("Max evidence", 1, 20, 4)
+            context_tokens = columns2[2].number_input("Context tokens", 128, 32768, 2048, step=128)
+            submitted = st.form_submit_button("Generate grounded answer")
+
+        if submitted:
+            if not question.strip():
+                st.error("Enter a question first.")
+            else:
+                payload = {
+                    "question": question.strip(),
+                    "profile_id": labels.get(profile_choice),
+                    "mode": mode,
+                    "query_mode": query_mode,
+                    "collection": collection.strip() or None,
+                    "candidate_depth": int(candidate_depth),
+                    "max_evidence": int(max_evidence),
+                    "context_tokens": int(context_tokens),
+                    "rerank": bool(rerank),
+                }
+                answer_status, body = api_post("/v1/answer", json=payload)
+                if answer_status != 200 or not isinstance(body, dict):
+                    st.error(f"Generation unavailable ({answer_status}): {body}")
+                else:
+                    _render_answer_record(body)
+        st.divider()
+
+    st.subheader("Recorded answer demonstrations")
+    demos = _fetch_answer_demos()
+    if not demos:
+        st.caption(
+            "No recorded answer demos. Run `rag-workbench answer record` locally to "
+            "produce them."
+        )
+        return
+    labels_by_demo = {_answer_demo_label(d): d.get("demo_id") for d in demos}
+    selected = st.selectbox(
+        "Recorded run", list(labels_by_demo.keys()), key="answer-demo-select"
+    )
+    demo_id = labels_by_demo[selected]
+    detail_status, detail = api_get(f"/v1/answer-demos/{demo_id}")
+    if detail_status != 200 or not isinstance(detail, dict):
+        st.error(f"Could not load demo ({detail_status}): {detail}")
+        return
+    _render_answer_record(detail.get("demo", {}))
+
+
 def render_failure_explorer() -> None:
     st.header("Failure Explorer")
     st.caption(
@@ -1002,6 +1250,7 @@ PAGES = {
     "Mode Comparison": render_compare,
     "Chunking Laboratory": render_chunking_lab,
     "Reranking Laboratory": render_reranking_lab,
+    "Answer Laboratory": render_answer_lab,
     "Evaluation Lab": render_evaluation_lab,
     "Failure Explorer": render_failure_explorer,
     "Performance Lab": render_performance_lab,
@@ -1017,10 +1266,13 @@ def main() -> None:
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption(
         "BM25 • dense (Sentence Transformers) • hybrid RRF • clause-aware chunking "
-        "• cross-encoder reranking • retrieval evaluation"
+        "• cross-encoder reranking • retrieval evaluation • grounded answers"
     )
     if READ_ONLY:
-        st.sidebar.info("Read-only demo: ingestion and new evaluation runs are disabled.")
+        st.sidebar.info(
+            "Read-only demo: ingestion, new evaluation runs and live generation are "
+            "disabled."
+        )
     if seed_note:
         st.sidebar.caption(seed_note)
     page = st.sidebar.radio("Navigate", list(PAGES.keys()))

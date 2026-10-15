@@ -11,6 +11,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import PlainTextResponse, Response
 from pydantic import ValidationError as PydanticValidationError
 
+from rag_workbench.answering.ollama import probe_generation
+from rag_workbench.answering.recorded import load_answer_demos
 from rag_workbench.api.deps import (
     get_evaluation_service,
     get_settings,
@@ -183,6 +185,8 @@ def app_config(
     service: EvaluationService = Depends(get_evaluation_service),
 ) -> dict:
     available = dense_feature_available()
+    generation = probe_generation(settings)
+    answer_demos = load_answer_demos(settings.recorded_answers_dir)
     return {
         "read_only": settings.read_only,
         "autoseed_sample": settings.autoseed_sample,
@@ -208,4 +212,14 @@ def app_config(
         "bundled_datasets_exists": settings.bundled_datasets_dir.is_dir(),
         "recorded_experiments_dir": str(settings.recorded_experiments_dir),
         "recorded_experiments_exists": settings.recorded_experiments_dir.is_dir(),
+        # Optional answer generation (Phase 5). Live generation is opt-in; the
+        # public demo reports it disabled and serves recorded demos instead.
+        "generation_enabled": settings.generation_enabled,
+        "generation_available": bool(generation.get("available")),
+        "generation_available_detail": str(generation.get("detail", "")),
+        "ollama_model": settings.ollama_model,
+        "ollama_base_url": settings.ollama_base_url,
+        "recorded_answer_demos": len(answer_demos),
+        "recorded_answers_dir": str(settings.recorded_answers_dir),
+        "recorded_answers_exists": settings.recorded_answers_dir.is_dir(),
     }
