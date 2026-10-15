@@ -894,8 +894,9 @@ def render_failure_explorer() -> None:
 def render_performance_lab() -> None:
     st.header("Performance Lab")
     st.caption(
-        "Latency percentiles are measured over the queries in one experiment; "
-        "candidate recall (pool coverage) is reported separately from ranking "
+        "Latency percentiles are measured only over the queries that actually "
+        "retrieved (unjudged queries are skipped before retrieval); candidate "
+        "recall (first-stage pool coverage) is reported separately from ranking "
         "recall (top-K coverage)."
     )
     experiments = _fetch_experiments()
@@ -936,9 +937,10 @@ def render_performance_lab() -> None:
         st.markdown("**Candidate pool vs ranking recall**")
         st.bar_chart(recall_by_stage)
     st.caption(
-        "candidate@N = share of relevant units present anywhere in the pool of N "
-        "chunks; rank@K = share present in the final top-K. A large gap points at "
-        "ranking; a low candidate@N points at the pool or the index."
+        "candidate@N = share of relevant units present anywhere in the first-stage "
+        "pool of N chunks (before reranking); rank@K = share present in the final "
+        "top-K. A large gap points at ranking; a low candidate@N points at the pool "
+        "or the index."
     )
 
     st.divider()

@@ -729,14 +729,21 @@ These figures were **measured in this project** on one Windows machine (CPU),
 Python 3.12, with `sentence-transformers/all-MiniLM-L6-v2` (384-d) and
 `cross-encoder/ms-marco-MiniLM-L6-v2`. They are single-machine observations, not
 a leaderboard. The exact runs are committed as artifacts in
-`benchmarks/recorded/` (see `benchmarks/README.md`).
+`benchmarks/recorded/` (see `benchmarks/README.md`); the artifacts were
+regenerated with record schema `2`, so every number below is reproducible from
+the committed code. Ranking metrics are unchanged from the original Phase 4 run
+where the code is unchanged; latency now covers only the queries that actually
+retrieved (see the note on unjudged queries).
 
 ### SciFact (BEIR, document-level)
 
 The **full** SciFact corpus (5183 documents) is chunked with the `paragraph`
-profile (9050 chunks) and evaluated on the 300 test claims that carry judgments
-(the 809 unjudged queries in `queries.jsonl` are counted and excluded, never
-silently dropped). `k=10`, chunk candidate depth 100.
+profile (9050 chunks) and evaluated on the 300 test claims that carry judgments.
+The 809 unjudged queries in `queries.jsonl` are **skipped before retrieval** (a
+query with no judgments can never produce a metric, so retrieving it would only
+waste work) and excluded from every aggregate and from latency; they are still
+reported in the run's `counts`, never silently dropped. `k=10`, chunk candidate
+depth 100.
 
 | Configuration | recall@10 | nDCG@10 | MRR@10 | candidate_recall@100 |
 |---|---|---|---|---|
@@ -766,10 +773,13 @@ reranker "finds" cannot have been absent from the pool). Both runs use BM25
 | BM25 + `ms-marco-MiniLM-L6-v2` rerank | **0.802** | **0.695** | **0.670** | 0.814 |
 
 Reranking improves nDCG@10 by ~0.047 and MRR@10 by ~0.059 with **no change to
-`candidate_recall@20`** — direct evidence that it only reordered the same pool
-and could not have recovered anything absent from it. Reranking cost is real on
-CPU: cross-encoder inference averaged ~750 ms per query for 20 candidates
-(p50 707 ms, p95 1057 ms) after a one-time ~16.7 s model load, so it is worth its
+candidate recall at any depth**: `candidate_recall@10` (0.777) and
+`candidate_recall@20` (0.814) are identical for the baseline and the reranked
+run, because candidate recall is measured on the first-stage pool and reranking
+only reorders that same pool. That is direct evidence the reranker could not
+have recovered anything absent from the pool. Reranking cost is real on CPU:
+cross-encoder inference averaged ~677 ms per query for 20 candidates
+(p50 670 ms, p95 812 ms) after a one-time ~18.3 s model load, so it is worth its
 quality gain only when ranking quality matters more than latency.
 
 ### Legal chunking comparison (bundled synthetic set, evidence-level)
@@ -781,13 +791,17 @@ the judged clause's evidence text (or matches its section number). Pool depth 10
 
 | Configuration | recall@10 | nDCG@10 | MRR@10 | candidate_recall@100 |
 |---|---|---|---|---|
-| BM25 (`or`), `paragraph` | 0.802 | 0.547 | 0.517 | 1.000 |
-| BM25 (`or`), `clause_aware` | 0.813 | 0.548 | 0.509 | 1.000 |
+| BM25 (`or`), `paragraph` | 0.833 | 0.590 | 0.544 | 1.000 |
+| BM25 (`or`), `clause_aware` | **0.854** | **0.604** | **0.554** | 1.000 |
 
 Clause-aware chunking is a small, *within-noise* improvement at the top of the
-ranking on this tiny set (recall@10 0.813 vs 0.802), and the candidate pool is
+ranking on this tiny set (recall@10 0.854 vs 0.833), and the candidate pool is
 complete in both cases. This is an honest "no dramatic difference at this scale"
-result, not a claim that clause-aware chunking is unnecessary.
+result, not a claim that clause-aware chunking is unnecessary. (The evidence
+mapping scores a retrieved chunk only when it contains the judged clause's
+evidence text or matches its section number, so these numbers are sensitive to
+exact chunk boundaries; both profiles are measured on the same corpus and
+judgments.)
 
 ### BM25 term combination (`and` vs `or`)
 
@@ -796,7 +810,7 @@ The same legal set sizes the effect of lexical term combination:
 | Query mode | recall@10 | nDCG@10 | candidate_recall@100 |
 |---|---|---|---|
 | `and` (every term must appear) | 0.104 | 0.104 | 0.104 |
-| `or` (any term; BM25 ranks) | **0.802** | **0.547** | **1.000** |
+| `or` (any term; BM25 ranks) | **0.833** | **0.590** | **1.000** |
 
 Long natural-language queries almost never contain *all* their terms in one
 chunk, so FTS5's implicit conjunction collapses to near-zero recall. This is a
