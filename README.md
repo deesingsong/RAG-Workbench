@@ -168,8 +168,10 @@ To deploy:
    `ui/streamlit_app.py`**.
 3. Set the Python version to **3.12**. Dependencies come from
    `uv.lock` / `pyproject.toml` (Community Cloud supports uv). The optional
-   `dense` extra is **not** installed, so the live demo runs on BM25 and
-   dense/hybrid return a clear `503` until a dense profile is built.
+   `dense` extra is **not** installed and the auto-seeded profile is
+   lexical-only, so the live demo runs on BM25: selecting `dense`/`hybrid`
+   returns a clear `422 profile_not_dense` (a degenerate dense profile would
+   instead return `503 dense_unavailable`).
 
 Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
 store reset when the app sleeps or reboots (hence the auto-seed) — and the
