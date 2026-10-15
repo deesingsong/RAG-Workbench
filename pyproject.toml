@@ -1,0 +1,54 @@
+[project]
+name = "rag-workbench"
+version = "0.1.0"
+description = "Local-first RAG retrieval engineering laboratory (Phase 0-1: ingestion + BM25 baseline)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "RAG Workbench" }]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "sqlalchemy>=2.0.30",
+    "pymupdf>=1.24",
+    "python-multipart>=0.0.9",
+    "streamlit>=1.37",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.27",
+    "pytest>=8.2",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+rag-workbench = "rag_workbench.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rag_workbench"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["data", "benchmarks/outputs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency-injection idiom uses function calls in argument defaults.
+"src/rag_workbench/api/**" = ["B008"]
+"ui/**" = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
