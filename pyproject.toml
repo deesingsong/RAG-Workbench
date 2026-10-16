@@ -20,11 +20,22 @@ dependencies = [
     "httpx>=0.27",
 ]
 
-# Dense retrieval extra. Optional so BM25 and the core test suite install and run
-# without pulling a deep-learning stack or any model weights.
+# Optional extras. None are required by the core install, the tests or the default
+# BM25 demo; each is opted into explicitly.
+#   dense     - local Sentence Transformers embeddings and the cross-encoder.
+#   load      - Locust, for the optional Phase 6 load test (a lighter httpx-based
+#               harness, `rag-workbench scaling load-test`, needs no extra).
+#   profiling - psutil, so the Phase 6 harness records process RSS instead of a
+#               Python-heap (tracemalloc) peak.
 [project.optional-dependencies]
 dense = [
     "sentence-transformers>=2.7",
+]
+load = [
+    "locust>=2.20",
+]
+profiling = [
+    "psutil>=5.9",
 ]
 
 [dependency-groups]

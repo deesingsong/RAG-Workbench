@@ -122,8 +122,8 @@ model pulled or imported; with no Ollama the rest of the project is unaffected.
 The core install, the tests and the default demo need no Docker, cloud account,
 API key or GPU. The **Phase 6 scalability tools** (synthetic corpus generator,
 performance harness, capacity model and built-in load-test harness) are part of the
-core install; only the optional Locust definition and the `psutil` memory probe are
-run with `uv run --with ...`.
+core install; Locust (`load` extra) and `psutil` (`profiling` extra) are optional
+extras, or can be used ad hoc via `uv run --with ...`.
 
 ---
 
@@ -351,13 +351,21 @@ documents (default 20,000), so an accidental run cannot exhaust local storage.
 read-only workloads are available through the optional Locust definition:
 
 ```powershell
-uv run --with locust locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
+uv run --extra load locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
 ```
 
-Locust and `psutil` (for RSS memory instead of a Python-heap peak) are **not**
-project dependencies; both are run with `uv run --with ...` so the core install
-stays zero-mandatory-cost. See [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md)
-and [`docs/case_studies.md`](docs/case_studies.md).
+Locust and `psutil` are declared as **optional extras** (`load` and `profiling`),
+so they are never installed by the core `uv sync` and the default demo stays
+zero-mandatory-cost. Install them when you want them:
+
+```powershell
+uv sync --extra load          # Locust
+uv sync --extra profiling     # psutil -> the harness records process RSS
+```
+
+`uv run --with locust ...` / `uv run --with psutil ...` also work without changing
+the environment. See [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md) and
+[`docs/case_studies.md`](docs/case_studies.md).
 
 ### Try a PDF
 

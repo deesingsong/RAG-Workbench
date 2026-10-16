@@ -115,7 +115,7 @@ execution environment (Python, platform, CPU, package versions), and one workloa
 block per corpus size with ingestion throughput, on-disk footprint (SQLite file,
 FTS5 shadow-table bytes and source bytes), BM25 latency percentiles by candidate
 depth, and a memory probe. Memory is a `tracemalloc` Python-heap peak unless
-`psutil` is installed (`uv run --with psutil ...`), in which case process RSS is
+`psutil` is installed (`uv sync --extra profiling`), in which case process RSS is
 recorded and labelled as such.
 
 Every artifact carries `source="recorded"` and a `limitations` list, so the
@@ -127,6 +127,8 @@ count**. See [`docs/scaling_to_10m.md`](../docs/scaling_to_10m.md) and
 [`docs/case_studies.md`](../docs/case_studies.md) for the interpretation.
 
 `load/` holds an **optional** Locust definition that exercises the read-only API
-endpoints. Locust is not a project dependency; run it through
-`uv run --with locust locust -f benchmarks/load/locustfile.py --host http://127.0.0.1:8765`.
+endpoints. Locust is an optional extra (`uv sync --extra load`), so it is never
+installed by the core sync; run it with
+`uv run --extra load locust -f benchmarks/load/locustfile.py --host http://127.0.0.1:8765`
+(or `uv run --with locust ...` without changing the environment).
 The built-in `rag-workbench scaling load-test` harness needs no extra install.
