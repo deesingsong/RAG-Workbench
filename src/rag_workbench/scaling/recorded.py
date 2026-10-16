@@ -25,8 +25,11 @@ from pydantic import ValidationError as PydanticValidationError
 
 from rag_workbench.domain.errors import ScalingError
 
-#: Bumped when the meaning of a scaling record's fields changes.
-SCALING_SCHEMA_VERSION = "1"
+#: Bumped when the meaning of a scaling record's fields changes. Version 2 adds
+#: explicit code-revision provenance (``git_dirty``/``provenance``) and splits the
+#: former single memory figure into instantaneous RSS, sampled-peak RSS and a
+#: Python-managed allocation peak.
+SCALING_SCHEMA_VERSION = "2"
 
 SCALING_SOURCE = "recorded"
 
@@ -70,9 +73,17 @@ class RetrievalLatency(BaseModel):
 class MemoryFootprint(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    peak_rss_mb: float | None = None
     available: bool = False
+    method: str = ""
     note: str = ""
+    #: One instantaneous process-RSS reading at the end of the workload (psutil).
+    rss_mb: float | None = None
+    #: Maximum of periodic process-RSS samples during the workload (psutil).
+    sampled_peak_rss_mb: float | None = None
+    #: Peak of Python-managed allocations (tracemalloc); *not* total process memory.
+    tracemalloc_peak_mb: float | None = None
+    #: Legacy field from schema version 1; never written by the current harness.
+    peak_rss_mb: float | None = None
 
 
 class ScalingWorkload(BaseModel):
@@ -106,6 +117,10 @@ class ScalingBenchmark(BaseModel):
     benchmark_id: str
     created_at: str | None = None
     git_commit: str | None = None
+    #: True/False when the working tree's state was checked; None when unknown.
+    git_dirty: bool | None = None
+    #: Human-readable provenance of the code revision (commit + tree state).
+    provenance: str | None = None
     environment: dict[str, Any] = Field(default_factory=dict)
     corpus: ScalingCorpusRecord = Field(default_factory=ScalingCorpusRecord)
     workloads: list[ScalingWorkload] = Field(default_factory=list)
@@ -194,6 +209,8 @@ def scaling_summary(record: dict[str, Any]) -> dict[str, Any]:
         "source": record.get("source", SCALING_SOURCE),
         "created_at": record.get("created_at"),
         "git_commit": record.get("git_commit"),
+        "git_dirty": record.get("git_dirty"),
+        "provenance": record.get("provenance"),
         "invalid": bool(record.get("invalid")),
         "invalid_reason": record.get("invalid_reason"),
         "schema_version": record.get("schema_version"),

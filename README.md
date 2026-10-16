@@ -95,11 +95,12 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
 - **Scalability engineering** (Phase 6): a bounded, reproducible **performance
   harness** over a deterministic synthetic corpus (ingestion throughput, on-disk
   footprint and BM25 latency by corpus size), a **deterministic capacity model**
-  that labels every line with its basis (`exact` / `measured` / `documented` /
-  `unknown`), a **lightweight local load-testing harness** (with an optional
-  Locust definition), committed scaling baselines, and a **design for ~10 million
-  documents** that preserves the retrieval interfaces. The prototype does **not**
-  serve 10M documents; the design is explicitly a plan.
+  that labels every line with its basis (`exact` / `measured` / `assumed` /
+  `documented` / `unknown`), a **lightweight local load-testing harness** (with an
+  optional Locust definition), committed scaling baselines with recorded code
+  provenance, and a **design for ~10 million documents** that preserves the
+  retrieval interfaces. The prototype does **not** serve 10M documents; the design
+  is explicitly a plan.
 - **FastAPI** endpoints with typed Pydantic contracts and OpenAPI docs, a
   **CLI**, and a **Streamlit** client that talks to the API over HTTP only.
 
@@ -331,7 +332,8 @@ uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --
 uv run rag-workbench scaling run --documents 1000,5000 --strategy fixed_token `
   --max-tokens 512 --overlap-tokens 64 --record
 
-# Capacity model for ~10M documents (storage + optional ingestion projection)
+# Capacity model for ~10M documents (storage + optional ingestion projection).
+# Defaults for throughput/overheads are illustrative assumptions (basis "assumed").
 uv run rag-workbench scaling capacity --documents 10000000 --scenario typical
 uv run rag-workbench scaling capacity --documents 10000000 --scenario typical `
   --documents-per-day 100000 --embedding-chunks-per-second-per-worker 20 --workers 4
@@ -340,15 +342,24 @@ uv run rag-workbench scaling capacity --documents 10000000 --scenario typical `
 uv run rag-workbench scaling list
 uv run rag-workbench scaling show <benchmark-id>
 
-# Bounded load test against a LOCAL server (never the public demo)
+# Bounded SMOKE-level load test against a LOCAL server (never the public demo).
+# A warm-up phase is excluded, and per-endpoint latency is reported.
 uv run rag-workbench serve            # in another terminal
-uv run rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed --users 4 --duration 10
+uv run rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed `
+  --users 4 --duration 10 --warmup 2
 ```
 
 `scaling run` refuses to index more than `RAG_WORKBENCH_SCALING_MAX_DOCUMENTS`
 documents (default 20,000), so an accidental run cannot exhaust local storage.
-`rag-workbench scaling load-test` uses only `httpx`; for richer reporting the same
-read-only workloads are available through the optional Locust definition:
+Every recorded artifact carries the code revision and whether the working tree was
+clean (`provenance`); a run from a dirty tree is flagged rather than presented as a
+clean revision.
+
+`rag-workbench scaling load-test` uses only `httpx`. Its numbers are a
+**smoke-level, single-machine observation** of **HTTP/API throughput across
+endpoints** — they are **not** RAG generation throughput, not retrieval throughput,
+and not a latency SLO. For richer reporting the same read-only workloads are
+available through the optional Locust definition:
 
 ```powershell
 uv run --extra load locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
@@ -857,13 +868,18 @@ notice. Character counts are never used as token counts.
 - **Scalability measurements are single-node and synthetic.** The performance
   harness measures the *current prototype* on one machine over a generated corpus;
   the numbers characterise cost, not relevance, and are not a production
-  throughput claim. The 10M-document capacity model is **deterministic arithmetic
-  over stated assumptions**, not a simulation, and its throughput inputs must be
-  supplied from a real benchmark. The proposed distributed architecture is
-  **design only** — none of PostgreSQL, a distributed lexical engine, a queue or a
-  Qdrant server is implemented or required. Dense/hybrid/rerank scaling is not
-  measured. Load testing targets a **locally controlled** server, never the public
-  demo.
+  throughput claim. Each recorded artifact names its code revision and whether the
+  working tree was clean, so a dirty-tree run is never presented as a clean
+  revision. The 10M-document capacity model is **deterministic arithmetic over
+  stated assumptions**, not a simulation: its default throughput and overhead
+  values are labelled `assumed`, and `keeps_up` is a conditional projection, not a
+  demonstrated capability. Process memory is only measured when `psutil` is
+  installed; otherwise RSS is reported as not measured and the Python-heap peak is
+  never extrapolated to it. The proposed distributed architecture is **design
+  only** — none of PostgreSQL, a distributed lexical engine, a queue or a Qdrant
+  server is implemented or required. Dense/hybrid/rerank scaling is not measured.
+  Load testing targets a **locally controlled** server, never the public demo, and
+  reports smoke-level HTTP/API throughput, not generation throughput.
 - `/v1/search` rejects unknown `mode` values with a clear message rather than
   pretending to support them.
 - **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
@@ -1231,8 +1247,9 @@ First-call latency is higher because the model is loaded on demand. Run
 
 Measured by `rag-workbench scaling run` on one machine (Windows 11, Python 3.13.5,
 16 logical cores, AMD64) over a deterministic synthetic corpus (seed 0), committed
-as `benchmarks/recorded_scaling/*.json`. **These are cost measurements on a single
-node, not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md).
+as `benchmarks/recorded_scaling/*.json`. Each record stores its code revision and
+working-tree state (`provenance`). **These are cost measurements on a single node,
+not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md).
 
 **Paragraph chunking (220/40 tokens), BM25, `query_mode=or`, 20 queries per cell:**
 
@@ -1242,12 +1259,18 @@ node, not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_1
 | 1,000 | 7,774 | 38.2 | 18.8 MB | 2.0 MB | 21.1 ms | 26.3 ms |
 | 5,000 | 38,709 | 33.1 | 87.3 MB | 9.9 MB | 112.2 ms | 105.0 ms |
 
-**Fixed-token chunking (512/64 tokens), BM25:**
+**Fixed-token chunking (512/64 tokens), BM25, 20 queries per configuration:**
 
 | Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index |
 |---:|---:|---:|---:|---:|
 | 1,000 | 18,154 | 24.5 | 21.2 MB | 2.4 MB |
 | 5,000 | 90,470 | 21.6 | 97.3 MB | 11.8 MB |
+
+There is **no single throughput number** here to quote out of context: ingestion is
+~22–38 tiny documents/second (single writer), and each retrieval configuration is
+measured over **20 queries** — not a benchmark at production query volume. The
+committed CLI load test is a **four-second-ish smoke observation of HTTP/API
+throughput across endpoints**, not RAG generation throughput.
 
 **Findings.**
 
@@ -1257,9 +1280,17 @@ node, not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_1
 - **Chunking strategy dominates chunk count:** a larger token budget produced
   *more* chunks, because fixed-token windows never cross block boundaries. This is
   the corpus's most influential cost assumption.
-- The capacity model projects ~3.5 TB total for the `typical` 10M-document
-  scenario (including replicas, a backup, a reindex working set and 25% headroom);
-  the measured FTS5 size (~267 B/chunk) calibrates its lexical estimate.
+- The capacity model's ~3.5 TB total for the `typical` 10M-document scenario is an
+  **assumption-based planning envelope** (illustrative overhead multipliers, plus
+  replicas, one backup, a reindex working set and 25% headroom), **not a measured
+  size**. The measured FTS5 size (~267 B/chunk) is only a calibration point against
+  its assumed lexical ratio.
+- **Capacity provenance:** the ingestion calculator defaults to illustrative
+  throughput with basis `assumed`; storage-overhead multipliers are also `assumed`.
+  `keeps_up=true` is a conditional projection, not a demonstrated capability.
+- **Memory provenance:** the harness distinguishes an instantaneous `rss_mb`, a
+  `sampled_peak_rss_mb` and a `tracemalloc_peak_mb` Python-heap peak; without
+  `psutil`, process RSS is reported as not measured and never inferred from the heap.
 - Dense, hybrid and reranked scaling were **not** measured (they need the optional
   `dense` extra and local model weights).
 

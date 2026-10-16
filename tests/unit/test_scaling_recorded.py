@@ -18,10 +18,12 @@ from rag_workbench.scaling.recorded import (
 
 def _artifact(benchmark_id: str = "scale-test") -> dict:
     return {
-        "schema_version": "1",
+        "schema_version": "2",
         "benchmark_id": benchmark_id,
         "created_at": "2026-10-16T10:00:00+00:00",
         "git_commit": "abc123",
+        "git_dirty": False,
+        "provenance": "abc123 (clean working tree)",
         "environment": {"python": "3.12.0", "cpu_count": 8},
         "corpus": {"documents": 100, "config": {"seed": 0}, "fingerprint": "deadbeef"},
         "workloads": [
@@ -109,3 +111,41 @@ def test_summary_reports_workload_and_modes() -> None:
     assert summary["documents_max"] == 100
     assert summary["modes"] == ["bm25"]
     assert summary["corpus_seed"] == 0
+
+
+def test_summary_exposes_code_revision_provenance() -> None:
+    record = _artifact("scale-prov")
+    record["git_dirty"] = True
+    record["provenance"] = "abc123 + uncommitted changes"
+
+    summary = scaling_summary(record)
+
+    assert summary["git_dirty"] is True
+    assert summary["provenance"] == "abc123 + uncommitted changes"
+
+
+def test_validate_accepts_split_memory_labels() -> None:
+    payload = _artifact("scale-mem")
+    payload["workloads"][0]["memory"] = {
+        "available": True,
+        "method": "psutil RSS sampled every 50 ms",
+        "note": "sampled peak, not OS high-water mark",
+        "rss_mb": 210.5,
+        "sampled_peak_rss_mb": 305.2,
+        "tracemalloc_peak_mb": 4.1,
+    }
+
+    model = validate_scaling_benchmark(payload)
+
+    memory = model.workloads[0].memory
+    assert memory is not None
+    assert memory.rss_mb == 210.5
+    assert memory.sampled_peak_rss_mb == 305.2
+    assert memory.tracemalloc_peak_mb == 4.1
+
+
+def test_learned_schema_version_defaults_to_current() -> None:
+    from rag_workbench.scaling.recorded import SCALING_SCHEMA_VERSION, ScalingBenchmark
+
+    model = ScalingBenchmark(benchmark_id="scale-x", workloads=[])
+    assert model.schema_version == SCALING_SCHEMA_VERSION == "2"

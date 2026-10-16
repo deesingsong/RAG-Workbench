@@ -13,7 +13,12 @@ from rag_workbench.config import Settings
 from rag_workbench.domain.errors import ScalingError
 from rag_workbench.scaling import harness
 from rag_workbench.scaling.corpus import CorpusConfig, generate_corpus
-from rag_workbench.scaling.harness import build_retrieval_queries, run_scaling_benchmark
+from rag_workbench.scaling.harness import (
+    RssSampler,
+    build_retrieval_queries,
+    describe_provenance,
+    run_scaling_benchmark,
+)
 
 
 def test_workload_above_cap_is_rejected_before_running(settings: Settings) -> None:
@@ -67,3 +72,55 @@ def test_build_retrieval_queries_is_deterministic_and_non_empty() -> None:
 def test_build_retrieval_queries_handles_empty_input() -> None:
     assert build_retrieval_queries([], 5) == []
     assert build_retrieval_queries(generate_corpus(CorpusConfig(documents=1)), 0) == []
+
+
+def test_describe_provenance_flags_a_dirty_tree() -> None:
+    text, limits = describe_provenance("abc123", True)
+    assert "abc123" in text
+    assert "uncommitted" in text
+    assert any("not the exact executable" in note for note in limits)
+
+
+def test_describe_provenance_accepts_a_clean_tree() -> None:
+    text, limits = describe_provenance("abc123", False)
+    assert "clean" in text
+    assert limits == []
+
+
+def test_describe_provenance_never_claims_unknown_state_is_clean() -> None:
+    text, limits = describe_provenance("abc123", None)
+    assert "unknown" in text
+    assert limits
+
+    text, limits = describe_provenance(None, None)
+    assert "unknown" in text
+    assert limits
+
+
+def test_default_limitations_contain_no_absolute_local_paths() -> None:
+    joined = " ".join(harness._default_limitations())
+    assert ":\\" not in joined  # no Windows drive paths
+    assert "/Users/" not in joined
+
+
+def test_rss_sampler_reports_sampled_peak_not_a_single_read() -> None:
+    sampler = RssSampler(lambda: 0)
+    # Readings in bytes, deliberately not monotonic: the peak is not the last one.
+    sampler._samples = [mebibytes * 1024 * 1024 for mebibytes in (100, 950, 300, 700, 200)]
+    footprint = sampler.footprint(0)
+
+    assert footprint["available"] is True
+    assert footprint["sampled_peak_rss_mb"] == 950.0
+    assert footprint["rss_mb"] == 200.0  # instantaneous final reading
+    assert footprint["tracemalloc_peak_mb"] == 0.0
+
+
+def test_rss_sampler_without_psutil_does_not_fake_process_memory() -> None:
+    sampler = RssSampler(None)
+    footprint = sampler.footprint(4 * 1024 * 1024)
+
+    assert footprint["available"] is False
+    assert footprint["rss_mb"] is None
+    assert footprint["sampled_peak_rss_mb"] is None
+    assert footprint["tracemalloc_peak_mb"] == 4.0
+    assert "not total process memory" in footprint["note"]

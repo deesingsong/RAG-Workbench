@@ -71,17 +71,33 @@ def test_every_component_declares_a_basis() -> None:
     estimate = estimate_storage(StorageAssumptions(documents=1_000_000))
     assert estimate.components
     for component in estimate.components:
-        assert component.basis in {"exact", "measured", "documented", "unknown"}
+        assert component.basis in {"exact", "measured", "assumed", "documented", "unknown"}
 
 
-def test_documented_overhead_components_marked_documented() -> None:
+def test_overhead_multipliers_are_assumptions_not_documented() -> None:
+    # The +50% vector, +20% payload and 35% lexical ratios are illustrative
+    # defaults with no identifiable external reference in this project, so they
+    # must be labelled "assumed", never "documented" or "measured".
     estimate = estimate_storage(_flat_storage())
     by_key = {component.key: component for component in estimate.components}
 
     assert by_key["raw_vectors"].basis == "exact"
-    assert by_key["vector_index_overhead"].basis == "documented"
-    assert by_key["payload_index"].basis == "documented"
-    assert by_key["lexical_index"].basis == "documented"
+    assert by_key["vector_index_overhead"].basis == "assumed"
+    assert by_key["payload_index"].basis == "assumed"
+    assert by_key["lexical_index"].basis == "assumed"
+
+
+def test_default_throughput_is_assumed_not_measured() -> None:
+    assert IngestionAssumptions().throughput_basis == "assumed"
+    estimate = estimate_ingestion(IngestionAssumptions())
+    assert estimate.basis == "assumed"
+    assert any("conditional projection" in note for note in estimate.notes)
+    assert any("assumed" in note for note in estimate.notes)
+
+
+def test_throughput_basis_is_caller_selectable() -> None:
+    estimate = estimate_ingestion(IngestionAssumptions(throughput_basis="measured"))
+    assert estimate.basis == "measured"
 
 
 def test_storage_scenarios_change_chunk_count() -> None:
@@ -147,3 +163,23 @@ def test_human_bytes_units() -> None:
 def test_assumptions_reject_negative_values() -> None:
     with pytest.raises(ValueError):
         StorageAssumptions(documents=0)
+
+
+def test_assumptions_reject_non_finite_values() -> None:
+    # Public calculator inputs must not accept NaN/Infinity, which would make the
+    # arithmetic meaningless (and serialize as invalid JSON downstream).
+    with pytest.raises(ValueError):
+        StorageAssumptions(chunks_per_document=float("inf"))
+    with pytest.raises(ValueError):
+        StorageAssumptions(operational_headroom=float("nan"))
+    with pytest.raises(ValueError):
+        IngestionAssumptions(embedding_chunks_per_second_per_worker=float("inf"))
+    with pytest.raises(ValueError):
+        IngestionAssumptions(worker_scaling_efficiency=float("nan"))
+
+
+def test_assumptions_reject_unreasonable_values() -> None:
+    with pytest.raises(ValueError):
+        StorageAssumptions(chunks_per_document=1_000_000_000)
+    with pytest.raises(ValueError):
+        IngestionAssumptions(embedding_chunks_per_second_per_worker=10_000_000_000)

@@ -450,6 +450,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     scaling_load.add_argument("--users", type=int, default=4)
     scaling_load.add_argument("--duration", type=float, default=10.0)
+    scaling_load.add_argument(
+        "--warmup", type=float, default=2.0, help="warm-up seconds excluded from results"
+    )
     scaling_load.add_argument("--json", action="store_true")
 
     return parser
@@ -1203,7 +1206,9 @@ def _cmd_scaling(settings: Settings, args: argparse.Namespace) -> int:
             print(
                 f"ingestion: {ing['chunks_per_day']:,.0f} chunks/day, bottleneck "
                 f"{ing['bottleneck_stage']} {ing['bottleneck_per_day']:,.0f} chunks/day, "
-                f"utilization {ing['utilization']:.2f}, keeps_up={ing['keeps_up']}"
+                f"utilization {ing['utilization']:.2f}, "
+                f"keeps_up={ing['keeps_up']} (conditional projection, basis "
+                f"'{ing['basis']}')"
             )
         return 0
 
@@ -1234,6 +1239,7 @@ def _cmd_scaling(settings: Settings, args: argparse.Namespace) -> int:
             print(json.dumps(record, indent=2))
             return 0
         print(f"benchmark {record['benchmark_id']} (schema {record['schema_version']})")
+        print(f"provenance: {record.get('provenance')}")
         for workload in record["workloads"]:
             ingestion = workload["ingestion"]
             index = workload["index"]
@@ -1275,19 +1281,32 @@ def _cmd_scaling(settings: Settings, args: argparse.Namespace) -> int:
 
     if command == "load-test":
         result = run_load_test_sync(
-            args.url, workload=args.workload, users=args.users, duration_s=args.duration
+            args.url,
+            workload=args.workload,
+            users=args.users,
+            duration_s=args.duration,
+            warmup_s=args.warmup,
         )
         if args.json:
             print(json.dumps(result, indent=2))
             return 0
         print(f"load test '{result['workload']}' against {result['base_url']}")
         print(
-            f"  users={result['concurrent_users']} duration={result['duration_s']}s "
-            f"requests={result['requests']} rps={result['requests_per_second']} "
-            f"errors={result['errors']} error_rate={result['error_rate']}"
+            f"  users={result['concurrent_users']} warmup={result['warmup_s']}s "
+            f"measured={result['duration_s']}s requests={result['requests']} "
+            f"rps={result['requests_per_second']} errors={result['errors']} "
+            f"error_rate={result['error_rate']}"
         )
         latency = result["latency_ms"]
         print(f"  latency ms: p50={latency['p50']} p95={latency['p95']} mean={latency['mean']}")
+        for name, endpoint in (result.get("by_endpoint") or {}).items():
+            endpoint_latency = endpoint["latency_ms"]
+            print(
+                f"  endpoint {name:<20} requests={endpoint['requests']:>6} "
+                f"errors={endpoint['errors']:>3} p50={endpoint_latency['p50']} "
+                f"p95={endpoint_latency['p95']}"
+            )
+        print("  (smoke-level local observation; HTTP throughput, not generation throughput)")
         return 0
 
     raise RagWorkbenchError(f"unknown scaling command: {command}", code="cli_error")

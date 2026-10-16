@@ -111,20 +111,26 @@ uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --
 ```
 
 Each `scale-*.json` file records the corpus configuration and fingerprint, the
-execution environment (Python, platform, CPU, package versions), and one workload
-block per corpus size with ingestion throughput, on-disk footprint (SQLite file,
-FTS5 shadow-table bytes and source bytes), BM25 latency percentiles by candidate
-depth, and a memory probe. Memory is a `tracemalloc` Python-heap peak unless
-`psutil` is installed (`uv sync --extra profiling`), in which case process RSS is
-recorded and labelled as such.
+execution environment (Python, platform, CPU, package versions), the code revision
+with its working-tree state (`git_commit`, `git_dirty`, `provenance`), and one
+workload block per corpus size with ingestion throughput, on-disk footprint (SQLite
+file, FTS5 shadow-table bytes and source bytes), BM25 latency percentiles by
+candidate depth, and a memory measurement. The memory fields are deliberately
+distinct: `rss_mb` is one instantaneous process-RSS reading, `sampled_peak_rss_mb`
+is the maximum of periodic process-RSS samples (both need `psutil`,
+`uv sync --extra profiling`), and `tracemalloc_peak_mb` is a Python-managed
+allocation peak that is **not** total process memory. Without `psutil`, process RSS
+is reported as not measured rather than inferred from the heap.
 
 Every artifact carries `source="recorded"` and a `limitations` list, so the
 read-only deployment shows real measurements without presenting them as a
-production throughput claim. The directory holds more than one artifact on
-purpose: the primary `paragraph`/220 baseline and a `fixed_token`/512 run
-demonstrate that **chunking strategy, not the token budget, dominates chunk
-count**. See [`docs/scaling_to_10m.md`](../docs/scaling_to_10m.md) and
-[`docs/case_studies.md`](../docs/case_studies.md) for the interpretation.
+production throughput claim. Historical artifacts that named the wrong code
+revision are preserved under `superseded/` (the loader ignores that subdirectory);
+the live artifacts were regenerated against committed code. The directory holds
+more than one artifact on purpose: the primary `paragraph`/220 baseline and a
+`fixed_token`/512 run demonstrate that **chunking strategy, not the token budget,
+dominates chunk count**. See [`docs/scaling_to_10m.md`](../docs/scaling_to_10m.md)
+and [`docs/case_studies.md`](../docs/case_studies.md) for the interpretation.
 
 `load/` holds an **optional** Locust definition that exercises the read-only API
 endpoints. Locust is an optional extra (`uv sync --extra load`), so it is never

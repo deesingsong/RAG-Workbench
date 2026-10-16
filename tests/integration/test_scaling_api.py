@@ -113,6 +113,49 @@ def test_capacity_rejects_invalid_assumptions(scaling_client: TestClient) -> Non
     assert response.status_code == 422
 
 
+def test_capacity_rejects_non_finite_assumptions(scaling_client: TestClient) -> None:
+    # `Infinity` is not valid JSON, but Python's json.loads parses it, so the
+    # public endpoint must still reject it rather than compute with a non-finite
+    # number. (The httpx `json=` encoder refuses to serialise it, hence a raw body.)
+    response = scaling_client.post(
+        "/v1/scaling/capacity",
+        content='{"storage": {"chunks_per_document": Infinity}}',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+
+
+def test_capacity_rejects_unreasonable_assumptions(scaling_client: TestClient) -> None:
+    response = scaling_client.post(
+        "/v1/scaling/capacity",
+        json={"storage": {"chunks_per_document": 1_000_000_000}},
+    )
+
+    assert response.status_code == 422
+
+
+def test_capacity_default_ingestion_basis_is_assumed(scaling_client: TestClient) -> None:
+    response = scaling_client.post(
+        "/v1/scaling/capacity", json={"ingestion": {"documents_per_day": 1000}}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["ingestion"]["basis"] == "assumed"
+    assert any("conditional projection" in note for note in body["ingestion"]["notes"])
+
+
+def test_capacity_storage_overheads_are_assumed(scaling_client: TestClient) -> None:
+    response = scaling_client.post("/v1/scaling/capacity", json={})
+
+    assert response.status_code == 200
+    components = {c["key"]: c for c in response.json()["storage"]["components"]}
+    assert components["vector_index_overhead"]["basis"] == "assumed"
+    assert components["payload_index"]["basis"] == "assumed"
+    assert components["lexical_index"]["basis"] == "assumed"
+
+
 def test_scenarios_endpoint(scaling_client: TestClient) -> None:
     response = scaling_client.get("/v1/scaling/scenarios")
 

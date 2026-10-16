@@ -5,8 +5,11 @@ explicit set of assumptions it computes storage and ingestion requirements, and
 labels every component with the *basis* for its number:
 
 * ``exact``       — exact arithmetic under the stated assumptions;
-* ``measured``    — derived from a throughput measured in this project;
-* ``documented``  — a range/ratio taken from vendor documentation;
+* ``measured``    — genuinely derived from a throughput measured in this project;
+* ``assumed``     — an illustrative default that has NOT been measured (for
+  example the built-in embedding throughput or the HNSW/payload overhead
+  multipliers); replacing it with a measured or documented figure is the point;
+* ``documented``  — supported by an identifiable external reference;
 * ``unknown``     — cannot be known without production benchmarking.
 
 The distinction matters: a projection is only as trustworthy as its weakest
@@ -22,7 +25,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-Basis = Literal["exact", "measured", "documented", "unknown"]
+Basis = Literal["exact", "measured", "assumed", "documented", "unknown"]
 
 BYTES_PER_KB = 1024
 BYTES_PER_GB = 1024**3
@@ -30,53 +33,72 @@ SECONDS_PER_DAY = 86400
 
 
 class StorageAssumptions(BaseModel):
-    """Inputs to the storage projection. All sizes are decimal-friendly averages."""
+    """Inputs to the storage projection. All sizes are decimal-friendly averages.
+
+    Numeric fields reject non-finite values (NaN/Infinity) and carry an upper
+    bound so the public calculator cannot be fed an unreasonable number that
+    produces a meaningless projection.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     documents: int = Field(default=10_000_000, ge=1, le=1_000_000_000)
-    chunks_per_document: float = Field(default=10.0, gt=0)
-    source_document_kb: float = Field(default=24.0, gt=0)
-    chunk_text_kb: float = Field(default=1.2, gt=0)
-    metadata_bytes_per_chunk: int = Field(default=640, ge=0)
+    chunks_per_document: float = Field(default=10.0, gt=0, le=100_000, allow_inf_nan=False)
+    source_document_kb: float = Field(default=24.0, gt=0, le=10_000_000, allow_inf_nan=False)
+    chunk_text_kb: float = Field(default=1.2, gt=0, le=1_000_000, allow_inf_nan=False)
+    metadata_bytes_per_chunk: int = Field(default=640, ge=0, le=100_000_000)
     embedding_dimensions: int = Field(default=384, ge=1, le=16384)
     bytes_per_dimension: int = Field(default=4, ge=1, le=8)
     #: Number of distinct embedding models/indexes indexed over the same corpus.
     vector_indexes: int = Field(default=1, ge=1, le=16)
     replication_factor: int = Field(default=2, ge=1, le=10)
     #: HNSW/graph overhead multiplier *on top of* raw vectors (1.5 == +50%).
-    vector_index_overhead_factor: float = Field(default=1.5, ge=1.0, le=5.0)
+    vector_index_overhead_factor: float = Field(
+        default=1.5, ge=1.0, le=5.0, allow_inf_nan=False
+    )
     #: Payload-index overhead multiplier on metadata (1.2 == +20%).
-    payload_index_overhead_factor: float = Field(default=1.2, ge=1.0, le=5.0)
+    payload_index_overhead_factor: float = Field(
+        default=1.2, ge=1.0, le=5.0, allow_inf_nan=False
+    )
     #: Lexical index size as a fraction of source text size.
-    lexical_index_ratio: float = Field(default=0.35, ge=0.0, le=5.0)
+    lexical_index_ratio: float = Field(default=0.35, ge=0.0, le=5.0, allow_inf_nan=False)
     backup_copies: int = Field(default=1, ge=0, le=10)
     #: Fraction of the primary footprint reserved for a full reindex working set.
-    temp_reindex_factor: float = Field(default=1.0, ge=0.0, le=5.0)
-    operational_headroom: float = Field(default=0.25, ge=0.0, le=5.0)
+    temp_reindex_factor: float = Field(default=1.0, ge=0.0, le=5.0, allow_inf_nan=False)
+    operational_headroom: float = Field(default=0.25, ge=0.0, le=5.0, allow_inf_nan=False)
 
 
 class IngestionAssumptions(BaseModel):
     """Inputs to the ingestion-throughput projection.
 
-    ``embedding_chunks_per_second_per_worker`` is expected to come from a measured
-    local benchmark (or a user-supplied figure); it is threaded through as
-    ``measured`` rather than guessed here.
+    ``embedding_chunks_per_second_per_worker``, ``indexing_chunks_per_second`` and
+    ``worker_scaling_efficiency`` are **illustrative assumptions** by default, so
+    ``throughput_basis`` defaults to ``"assumed"``. Supply figures from your own
+    measured run and set ``throughput_basis="measured"`` (or cite an external
+    source and use ``"documented"``) before reading ``keeps_up`` as anything more
+    than a conditional projection.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    documents_per_day: int = Field(default=100_000, ge=0)
-    chunks_per_document: float = Field(default=10.0, gt=0)
-    embedding_chunks_per_second_per_worker: float = Field(default=20.0, gt=0)
-    indexing_chunks_per_second: float = Field(default=200.0, gt=0)
+    documents_per_day: int = Field(default=100_000, ge=0, le=1_000_000_000_000)
+    chunks_per_document: float = Field(default=10.0, gt=0, le=100_000, allow_inf_nan=False)
+    embedding_chunks_per_second_per_worker: float = Field(
+        default=20.0, gt=0, le=10_000_000, allow_inf_nan=False
+    )
+    indexing_chunks_per_second: float = Field(
+        default=200.0, gt=0, le=1_000_000_000, allow_inf_nan=False
+    )
     workers: int = Field(default=4, ge=1, le=1024)
     #: Fraction of ideal linear speed-up actually achieved when adding workers.
     #: 1.0 would be perfect scaling, which CPU ingestion rarely delivers.
-    worker_scaling_efficiency: float = Field(default=0.75, ge=0.0, le=1.0)
-    available_hours_per_day: float = Field(default=24.0, gt=0, le=24)
-    retry_overhead: float = Field(default=0.10, ge=0.0, le=5.0)
-    throughput_basis: Basis = "measured"
+    worker_scaling_efficiency: float = Field(
+        default=0.75, ge=0.0, le=1.0, allow_inf_nan=False
+    )
+    available_hours_per_day: float = Field(default=24.0, gt=0, le=24, allow_inf_nan=False)
+    retry_overhead: float = Field(default=0.10, ge=0.0, le=5.0, allow_inf_nan=False)
+    #: ``"assumed"`` unless the caller supplies a genuinely measured throughput.
+    throughput_basis: Basis = "assumed"
 
 
 class StorageComponent(BaseModel):
@@ -201,22 +223,32 @@ def estimate_storage(assumptions: StorageAssumptions) -> StorageEstimate:
             key="vector_index_overhead",
             label="Vector index (HNSW/graph) overhead",
             bytes=vector_index_overhead,
-            basis="documented",
-            note=f"+{(assumptions.vector_index_overhead_factor - 1) * 100:.0f}% over raw vectors",
+            basis="assumed",
+            note=(
+                f"+{(assumptions.vector_index_overhead_factor - 1) * 100:.0f}% over raw "
+                "vectors — an assumption to replace with the chosen engine's documented "
+                "figure"
+            ),
         ),
         StorageComponent(
             key="payload_index",
             label="Payload index overhead",
             bytes=payload_index_bytes,
-            basis="documented",
-            note=f"+{(assumptions.payload_index_overhead_factor - 1) * 100:.0f}% over metadata",
+            basis="assumed",
+            note=(
+                f"+{(assumptions.payload_index_overhead_factor - 1) * 100:.0f}% over "
+                "metadata — an assumption, not a measured index size"
+            ),
         ),
         StorageComponent(
             key="lexical_index",
             label="Lexical index",
             bytes=lexical_bytes,
-            basis="documented",
-            note=f"{assumptions.lexical_index_ratio:.0%} of source text",
+            basis="assumed",
+            note=(
+                f"{assumptions.lexical_index_ratio:.0%} of source text — an assumption; "
+                "the measured FTS5 prototype is a calibration point, not this ratio"
+            ),
         ),
     ]
     primary = sum(component.bytes for component in components)
@@ -263,8 +295,12 @@ def estimate_ingestion(assumptions: IngestionAssumptions) -> IngestionEstimate:
         "Effective workers assume non-linear CPU scaling "
         f"(efficiency {assumptions.worker_scaling_efficiency:.2f}); throughput is "
         "not assumed to grow linearly with worker count.",
-        "Embedding throughput is treated as a measured/user-supplied input; this "
-        "model does not invent GPU or multi-core throughput.",
+        f"Throughput basis is '{assumptions.throughput_basis}'. Embedding throughput, "
+        "indexing throughput and worker efficiency are illustrative assumptions "
+        "unless you supplied measured values; this model does not invent or verify "
+        "GPU/multi-core throughput.",
+        "keeps_up is a conditional projection under these assumptions, not a "
+        "demonstrated production capability.",
         "Initial bulk ingestion and continuous incremental updates should be "
         "planned as separate workloads sharing the same capacity.",
     ]

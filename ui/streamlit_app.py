@@ -1394,11 +1394,17 @@ def _render_scaling_baselines() -> None:
 
     env = record.get("environment") or {}
     hardware = record.get("hardware") or {}
+    provenance = record.get("provenance") or record.get("git_commit")
     st.caption(
-        f"created {record.get('created_at')} • commit {record.get('git_commit')} • "
+        f"created {record.get('created_at')} • revision {provenance} • "
         f"platform {env.get('platform')} • python {env.get('python')} • "
         f"cpu {hardware.get('processor')} ({hardware.get('cpu_count')} cores)"
     )
+    if record.get("git_dirty"):
+        st.warning(
+            "This artifact was recorded from a working tree with uncommitted "
+            "changes, so its revision identifies HEAD, not the exact code that ran."
+        )
     corpus = record.get("corpus") or {}
     st.caption(
         f"corpus {corpus.get('documents')} docs • "
@@ -1419,12 +1425,24 @@ def _render_scaling_baselines() -> None:
                 "source_bytes": index.get("source_bytes"),
                 "db_bytes": index.get("db_bytes"),
                 "fts_bytes": index.get("fts_bytes"),
-                "peak_rss_mb": memory.get("peak_rss_mb"),
+                "sampled_peak_rss_mb": memory.get("sampled_peak_rss_mb"),
+                "tracemalloc_peak_mb": memory.get("tracemalloc_peak_mb"),
             }
         )
     if rows:
         st.markdown("**Indexing footprint by corpus size**")
         st.dataframe(rows, hide_index=True, use_container_width=True)
+        methods = {
+            (workload.get("memory") or {}).get("method")
+            for workload in record.get("workloads", [])
+        }
+        methods.discard(None)
+        st.caption(
+            "Memory: `sampled_peak_rss_mb` is the maximum of periodic process-RSS "
+            "samples and needs `psutil`; `tracemalloc_peak_mb` is a Python-managed "
+            "allocation peak and is **not** total process memory. "
+            f"Method(s): {', '.join(sorted(str(m) for m in methods)) or 'unknown'}."
+        )
 
     latency_rows = []
     for workload in record.get("workloads", []):
@@ -1442,7 +1460,7 @@ def _render_scaling_baselines() -> None:
                 }
             )
     if latency_rows:
-        st.markdown("**Retrieval latency by corpus size**")
+        st.markdown("**Retrieval latency by corpus size** (20 queries per configuration)")
         st.dataframe(latency_rows, hide_index=True, use_container_width=True)
 
     if record.get("failures"):
@@ -1454,9 +1472,11 @@ def _render_scaling_baselines() -> None:
 
 def _render_scaling_capacity() -> None:
     st.caption(
-        "A deterministic capacity model, not a simulation. Every line is labelled "
-        "with its basis: exact arithmetic under the stated assumptions, or a ratio "
-        "taken from vendor documentation. Throughput inputs are treated as measured."
+        "A deterministic capacity model, not a simulation or a measurement. Every "
+        "line is labelled with its basis: `exact` arithmetic under the stated "
+        "assumptions, `assumed` illustrative defaults, `documented` vendor ratios, "
+        "`measured` values from a recorded run, or `unknown`. The default throughput "
+        "and storage-overhead values are assumptions — replace them with your own."
     )
     columns = st.columns(3)
     documents = columns[0].number_input(
@@ -1523,6 +1543,13 @@ def _render_scaling_capacity() -> None:
             for component in components
         ]
         st.dataframe(rows, hide_index=True, use_container_width=True)
+        assumed = [row["component"] for row in rows if row.get("basis") == "assumed"]
+        if assumed:
+            st.caption(
+                "Assumed (not measured) components: "
+                + ", ".join(str(name) for name in assumed)
+                + "."
+            )
     totals = [
         ("primary", storage.get("primary_bytes")),
         ("replicas", storage.get("replica_bytes")),
@@ -1548,13 +1575,23 @@ def _render_scaling_capacity() -> None:
             f"utilization {ingestion.get('utilization'):.2f}"
         )
         if ingestion.get("keeps_up"):
-            st.success("Configuration keeps up. " + message)
+            st.info(
+                "Under these assumptions the configuration would keep up — a "
+                "conditional projection, not a demonstrated production capability. "
+                + message
+            )
         else:
-            st.warning("Projected backlog. " + message)
+            st.warning("Projected backlog under these assumptions. " + message)
         st.caption(
             f"effective workers {ingestion.get('effective_workers'):.2f} "
-            "(non-linear scaling)"
+            f"(non-linear scaling) • throughput basis '{ingestion.get('basis')}'"
         )
+        if ingestion.get("basis") == "assumed":
+            st.caption(
+                "⛑️ The throughput values above are illustrative assumptions. Supply a "
+                "measured embedding/indexing rate to make this a measurement-backed "
+                "projection."
+            )
         for note in ingestion.get("notes", []):
             st.caption(f"• {note}")
 

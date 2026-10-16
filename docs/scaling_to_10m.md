@@ -6,9 +6,10 @@ local prototype was measured at bounded corpus sizes on a single machine (see
 extrapolation, published vendor behaviour, or an assumption that must be replaced
 by a production benchmark. Numbers that come from measurement are labelled
 `measured here`; numbers that come from arithmetic over assumptions are labelled
-`exact arithmetic under assumptions`; numbers taken from documentation are
-labelled `documented`; and numbers that cannot be known without production
-hardware are labelled `unknown`.
+`exact arithmetic under assumptions`; numbers that are illustrative defaults with
+no measurement behind them are labelled `assumed`; numbers taken from an
+identifiable external reference are labelled `documented`; and numbers that cannot
+be known without production hardware are labelled `unknown`.
 
 The repository's own assumptions are encoded in
 `src/rag_workbench/scaling/capacity.py`, so the tables below can be regenerated
@@ -46,11 +47,14 @@ regenerates byte-identical documents.
 - **Corpus:** synthetic, mixed short/typical/large documents; seed `0`.
   `measured here`
 - **Retrieval:** BM25 (SQLite FTS5), `query_mode="or"`, 20 generated queries per
-  workload, candidate depths 10/50/100. `measured here`
+  workload/config, candidate depths 10/50/100. `measured here`
 - **Not measured in these artifacts:** dense retrieval, hybrid retrieval,
   cross-encoder reranking, and answer generation. Those need the optional `dense`
   extra and are intentionally out of scope for the recorded baseline. `not
   measured`
+- **Code revision:** each artifact records the commit and whether the working tree
+  was clean (`provenance`). A record produced from a dirty tree is flagged and is
+  not an exact source revision.
 
 Recorded artifacts live in [`benchmarks/recorded_scaling/`](../benchmarks/recorded_scaling/)
 and are loaded, validated and displayed by the read-only demo.
@@ -121,6 +125,21 @@ dominates chunk count.**
 - BM25 p50 grows roughly with corpus size for `or` queries that match many
   documents — from 3.8 ms to 112 ms across a ~56× increase in chunks. `measured here`
 
+### 4.4 Memory measurements (three distinct labels)
+
+The harness records three different things that must not be conflated, and the
+read-only demo shows them as separate columns:
+
+- `rss_mb` — **one instantaneous** process-RSS reading at the end of a workload;
+- `sampled_peak_rss_mb` — the **maximum of periodic** process-RSS samples taken
+  while the workload ran (a *sampled* peak, not an OS high-water mark);
+- `tracemalloc_peak_mb` — the peak of **Python-managed allocations**.
+
+The first two require the optional `psutil` extra (`uv sync --extra profiling`).
+Without it, process memory is reported as **not measured** — the harness does not
+substitute a Python-heap number for RSS, and `tracemalloc_peak_mb` is **never**
+extrapolated to total process memory.
+
 ---
 
 ## 5. Extrapolating the single-node prototype
@@ -131,7 +150,7 @@ be re-architected rather than resized. The largest configuration actually execut
 is **5,000 documents / 90,470 chunks** (`measured here`); every figure below that
 is a model or an extrapolation, never a run.
 
-Assume the "typical" shape of **10 documents × 10 chunks = 100M chunks**.
+Assume the "typical" shape of **10 million documents × 10 chunks = 100M chunks**.
 
 | Quantity | Basis | Value |
 |---|---|---:|
@@ -163,7 +182,8 @@ rag-workbench scaling capacity --documents 10000000 --scenario typical --documen
 
 ### 6.1 Storage, `typical` scenario (10M docs, 10 chunks/doc, 384-d vectors)
 
-Basis key: **E** = exact arithmetic under assumptions, **D** = documented ratio.
+Basis key: **E** = exact arithmetic under assumptions, **A** = illustrative
+assumption (no measurement behind it), **D** = identifiable external reference.
 
 | Component | Basis | Size |
 |---|---|--:|
@@ -171,9 +191,9 @@ Basis key: **E** = exact arithmetic under assumptions, **D** = documented ratio.
 | Chunk text | E | 114 GB |
 | Chunk metadata | E | 60 GB |
 | Raw embedding vectors (384-d fp32) | E | 143 GB |
-| Vector index (HNSW/graph) overhead (+50%) | D | 72 GB |
-| Payload index overhead (+20%) | D | 12 GB |
-| Lexical index (35% of source text) | D | 80 GB |
+| Vector index (HNSW/graph) overhead (+50%) | A | 72 GB |
+| Payload index overhead (+20%) | A | 12 GB |
+| Lexical index (35% of source text) | A | 80 GB |
 | **Primary subtotal** | | **~710 GB** |
 | Replicas (factor 2) | E | 710 GB |
 | Backups (1 copy) | E | 710 GB |
@@ -181,9 +201,15 @@ Basis key: **E** = exact arithmetic under assumptions, **D** = documented ratio.
 | Operational headroom (+25%) | E | 710 GB |
 | **Total** | | **~3.5 TB** |
 
+**This ~3.5 TB total is an assumption-based planning envelope, not a measurement.**
+It is the model's arithmetic over illustrative defaults (the three `A` rows plus
+the replica, backup, reindex and headroom factors); it is not a size that was ever
+produced or observed. Replace the assumed overhead multipliers with your engine's
+documented ratios and your own corpus statistics before treating it as a budget.
+
 **Calibration against measurement.** The measured prototype FTS5 index was ~267
-B/chunk, i.e. ~27 GB for 100M chunks, against the model's documented 80 GB
-lexical estimate — the model is conservative for this corpus shape. The model is a
+B/chunk, i.e. ~27 GB for 100M chunks, against the model's assumed 80 GB lexical
+estimate — the model is conservative for this corpus shape. The model is a
 *planning envelope*, not a measurement; always override it with your own corpus
 statistics (average chunks/document and source size) before trusting the total.
 
@@ -192,9 +218,11 @@ are reported alongside the estimate.
 
 ### 6.2 Ingestion, continuous stream
 
-The ingestion model treats embedding throughput as a **measured/user-supplied**
-input and applies non-linear worker scaling (adding workers does not scale
-linearly). Example: 100,000 documents/day at 10 chunks/document = 1M chunks/day.
+The ingestion model applies non-linear worker scaling (adding workers does not
+scale linearly) and takes embedding/indexing throughput as **inputs**. Those
+inputs default to illustrative values with basis `assumed`; they are only
+`measured` when you supply a figure from your own run. Example: 100,000
+documents/day at 10 chunks/document = 1M chunks/day.
 
 ```powershell
 rag-workbench scaling capacity --documents 10000000 ^
@@ -203,9 +231,12 @@ rag-workbench scaling capacity --documents 10000000 ^
 ```
 
 The model reports the bottleneck stage (embedding vs indexing), utilization and any
-projected backlog. **Replace `--embedding-chunks-per-second-per-worker` with a
-number you measured on your own hardware**; the model does not invent GPU or
-multi-core throughput. Initial bulk load and continuous incremental ingestion must
+projected backlog, and labels the throughput basis. **Replace
+`--embedding-chunks-per-second-per-worker` with a number you measured on your own
+hardware** and set the basis to `measured`; the model does not invent GPU or
+multi-core throughput. Because the default rates are assumptions, `keeps_up=true`
+is a **conditional projection under those assumptions**, not a demonstrated
+production capability. Initial bulk load and continuous incremental ingestion must
 be planned as **two workloads sharing one capacity**, not one.
 
 ---
@@ -381,6 +412,8 @@ rag-workbench scaling run --documents 1000,5000 --strategy fixed_token ^
 rag-workbench scaling capacity --documents 10000000 --scenario typical
 ```
 
-Every recorded artifact stores its own environment, corpus fingerprint and
-limitations, so a number displayed in the demo can always be traced back to the
-run that produced it.
+Every recorded artifact stores its own environment, corpus fingerprint, code
+revision with its working-tree state (`provenance`), and limitations, so a number
+displayed in the demo can always be traced back to the run that produced it — and a
+run made from uncommitted code is flagged rather than presented as a clean
+revision.

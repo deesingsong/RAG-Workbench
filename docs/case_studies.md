@@ -152,3 +152,49 @@ retrieval, so reranking can never change pool coverage.
 
 **Residual risk.** The semantics are correct but subtle; a single place
 (`EvalRunConfig` validation) must remain the source of truth as stages are added.
+
+---
+
+## Case 7 — A benchmark recorded the wrong code revision
+
+**Symptom.** The first committed scaling artifacts named Git revision `5c22ef6`,
+which predates the scaling harness itself. The harness recorded `git rev-parse
+HEAD` and nothing else, so a run made from a **dirty working tree** silently
+attributed its numbers to whatever commit happened to be checked out.
+
+**Root cause.** `HEAD` identifies the last commit, not the code that actually ran.
+During Phase 6 the harness code was uncommitted, so `HEAD` pointed at the previous
+phase while the measurements came from new, untracked code.
+
+**Fix.** The harness now records both the commit and whether the working tree was
+clean (`git_dirty`) plus a human-readable `provenance`. A dirty or unknown tree
+adds an explicit limitation and the repository keeps the superseded artifacts under
+`benchmarks/recorded_scaling/superseded/`; the live artifacts are regenerated
+against committed code. `SCALING_SCHEMA_VERSION` was bumped to 2 to mark the change.
+
+**Residual risk.** Revision provenance depends on `git` being available at record
+time; when it is not, the harness records `unknown` rather than claiming a
+revision it could not verify.
+
+---
+
+## Case 8 — "Peak RSS" that was one instantaneous reading
+
+**Symptom.** A memory figure in the scaling record was labelled `peak_rss_mb`, but
+the harness read `memory_info().rss` exactly once at the end of a workload. That is
+an instantaneous value, not a peak, and it silently changed meaning depending on
+when the probe ran.
+
+**Root cause.** Three different quantities were collapsed into one name: an
+instantaneous process RSS reading, a true sampled peak, and a Python-heap peak from
+`tracemalloc`.
+
+**Fix.** They are now separate fields with distinct labels: `rss_mb` (one
+instantaneous reading), `sampled_peak_rss_mb` (maximum of periodic readings taken
+by a background sampler), and `tracemalloc_peak_mb` (Python-managed allocations
+only). When `psutil` is absent, process RSS is reported as **not measured** rather
+than substituted, and the record states that `tracemalloc_peak_mb` is not total
+process memory. The Capacity/Memory views state the same distinction.
+
+**Residual risk.** Even a sampled peak is not the OS high-water mark; it is the
+maximum of whatever the sampler happened to observe.

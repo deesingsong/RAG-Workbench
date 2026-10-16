@@ -51,6 +51,31 @@ def git_commit(root: Path | None = None) -> str | None:
     return sha or None
 
 
+def git_worktree_dirty(root: Path | None = None) -> bool | None:
+    """Return whether the working tree has uncommitted changes.
+
+    ``True`` means there are staged or unstaged changes (so ``HEAD`` is *not* the
+    exact executable source); ``False`` means the tree is clean; ``None`` means
+    the state could not be determined (git is missing, or ``root`` is not a
+    repository). A caller must never present ``None`` as "clean".
+    """
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(root) if root else None,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return bool(result.stdout.strip())
+
+
 def runtime_environment() -> dict[str, object]:
     """Best-effort description of the interpreter, host and key libraries."""
 
@@ -103,4 +128,10 @@ def latency_stats(samples: Sequence[float]) -> dict[str, float | int | None]:
     }
 
 
-__all__ = ["git_commit", "latency_stats", "percentile", "runtime_environment"]
+__all__ = [
+    "git_commit",
+    "git_worktree_dirty",
+    "latency_stats",
+    "percentile",
+    "runtime_environment",
+]
