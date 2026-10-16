@@ -1255,28 +1255,30 @@ not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md)
 
 | Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index | @10 p50 | @100 p50 |
 |---:|---:|---:|---:|---:|---:|---:|
-| 100 | 687 | 34.7 | 1.8 MB | 177 KB | 3.8 ms | 6.5 ms |
-| 1,000 | 7,774 | 38.2 | 18.8 MB | 2.0 MB | 21.1 ms | 26.3 ms |
-| 5,000 | 38,709 | 33.1 | 87.3 MB | 9.9 MB | 112.2 ms | 105.0 ms |
+| 100 | 687 | 14.3 | 1.8 MB | 177 KB | 2.6 ms | 5.4 ms |
+| 1,000 | 7,774 | 30.5 | 18.8 MB | 2.0 MB | 20.6 ms | 25.0 ms |
+| 5,000 | 38,709 | 40.5 | 87.2 MB | 9.9 MB | 98.0 ms | 102.9 ms |
 
 **Fixed-token chunking (512/64 tokens), BM25, 20 queries per configuration:**
 
 | Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index |
 |---:|---:|---:|---:|---:|
-| 1,000 | 18,154 | 24.5 | 21.2 MB | 2.4 MB |
-| 5,000 | 90,470 | 21.6 | 97.3 MB | 11.8 MB |
+| 1,000 | 18,154 | 35.0 | 21.2 MB | 2.4 MB |
+| 5,000 | 90,470 | 33.8 | 97.3 MB | 11.8 MB |
 
 There is **no single throughput number** here to quote out of context: ingestion is
-~22–38 tiny documents/second (single writer), and each retrieval configuration is
-measured over **20 queries** — not a benchmark at production query volume. The
-committed CLI load test is a **four-second-ish smoke observation of HTTP/API
-throughput across endpoints**, not RAG generation throughput.
+~30–40 tiny documents/second at steady state (the smallest, cold-start workload
+reports 14.3 docs/s), and each retrieval configuration is measured over **20
+queries** — not a benchmark at production query volume. The CLI load test is a
+**bounded, warm-up-adjusted smoke observation of HTTP/API throughput across
+endpoints** (`docs/scaling_to_10m.md` §8.2), not RAG generation throughput.
 
 **Findings.**
 
-- Single-writer ingestion is ~22–38 tiny documents/second and BM25 p50 grows from
-  ~4 ms to ~112 ms across a ~56× increase in chunks. The prototype does not scale
-  linearly, and resizing a single node is not the path to 10M documents.
+- Single-writer ingestion is ~30–40 tiny documents/second at steady state, and
+  BM25 p50 grows from ~2.6 ms to ~98 ms across a ~56× increase in chunks. The
+  prototype does not scale linearly, and resizing a single node is not the path to
+  10M documents.
 - **Chunking strategy dominates chunk count:** a larger token budget produced
   *more* chunks, because fixed-token windows never cross block boundaries. This is
   the corpus's most influential cost assumption.

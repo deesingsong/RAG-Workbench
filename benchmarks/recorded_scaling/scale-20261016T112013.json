@@ -1,0 +1,406 @@
+{
+  "schema_version": "2",
+  "benchmark_id": "scale-20261016T112013",
+  "created_at": "2026-10-16T11:20:13.234141+00:00",
+  "git_commit": "eb59260c6a9e6b9831bf013238a78e843c42b685",
+  "git_dirty": false,
+  "provenance": "eb59260c6a9e6b9831bf013238a78e843c42b685 (clean working tree)",
+  "source": "recorded",
+  "environment": {
+    "python": "3.13.5",
+    "implementation": "CPython",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "machine": "AMD64",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "cpu_count": 16,
+    "packages": {
+      "rag-workbench": "0.1.0",
+      "torch": "2.14.1",
+      "sentence-transformers": "6.1.0",
+      "transformers": "5.19.0",
+      "qdrant-client": "1.19.1",
+      "sqlalchemy": "2.1.4",
+      "numpy": "2.5.4"
+    }
+  },
+  "hardware": {
+    "cpu_count": 16,
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "machine": "AMD64",
+    "platform": "Windows-11-10.0.26300-SP0"
+  },
+  "corpus": {
+    "config": {
+      "documents": 5000,
+      "seed": 0,
+      "paragraphs_per_section": 2,
+      "words_per_paragraph": 55,
+      "distinctive_terms": 6,
+      "id_prefix": "syn"
+    },
+    "documents": 5000,
+    "fingerprint": "5f927b68f4376f397d53fccd6867ebfcc0af4b0f40e74f709da91a796e8b1467",
+    "size_classes": {
+      "short": 1440,
+      "typical": 2542,
+      "large": 1018
+    }
+  },
+  "config": {
+    "strategy": "paragraph",
+    "max_tokens": 220,
+    "overlap_tokens": 40,
+    "candidate_depths": [
+      10,
+      50,
+      100
+    ],
+    "query_mode": "or",
+    "modes": [
+      "bm25"
+    ],
+    "retrieval_queries": 20
+  },
+  "workloads": [
+    {
+      "documents": 100,
+      "chunks": 687,
+      "corpus_fingerprint": "5e6848a2c7e829a2b0dbde20e7b99bf6962df9214ba9bba06820679a637593d5",
+      "ingestion": {
+        "total_ms": 7009.184,
+        "documents_per_second": 14.267,
+        "chunks_total": 687,
+        "parse_ms": {
+          "count": 100,
+          "mean": 0.438,
+          "p50": 0.392,
+          "p95": 0.921,
+          "min": 0.136,
+          "max": 1.471
+        },
+        "chunk_ms": {
+          "count": 100,
+          "mean": 1.881,
+          "p50": 1.625,
+          "p95": 4.942,
+          "min": 0.303,
+          "max": 9.262
+        },
+        "index_ms": {
+          "count": 100,
+          "mean": 4.04,
+          "p50": 3.699,
+          "p95": 7.436,
+          "min": 1.063,
+          "max": 14.879
+        },
+        "per_document_ms": {
+          "count": 100,
+          "mean": 36.441,
+          "p50": 32.781,
+          "p95": 51.525,
+          "min": 17.785,
+          "max": 381.366
+        }
+      },
+      "index": {
+        "source_bytes": 761053,
+        "db_bytes": 1888256,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 1888256,
+        "fts_bytes": 181373,
+        "total_bytes": 1888256
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 2.711,
+            "p50": 2.601,
+            "p95": 3.219,
+            "min": 2.312,
+            "max": 3.572
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 3.974,
+            "p50": 3.997,
+            "p95": 4.274,
+            "min": 3.661,
+            "max": 4.281
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 5.509,
+            "p50": 5.428,
+            "p95": 5.869,
+            "min": 5.152,
+            "max": 6.015
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": true,
+        "method": "psutil RSS sampled every 50 ms",
+        "note": "sampled_peak_rss_mb is the maximum of periodic process-RSS samples; rss_mb is the final sample. Neither is an OS high-water mark, and many consecutive samples may share the same value.",
+        "rss_mb": 163.191,
+        "sampled_peak_rss_mb": 163.191,
+        "tracemalloc_peak_mb": 3.138
+      },
+      "failures": []
+    },
+    {
+      "documents": 1000,
+      "chunks": 7774,
+      "corpus_fingerprint": "93b1bfebf2438751de7ae7c21f006f4d0e9e8c2ce3f22e4bd9f3c65a48df012e",
+      "ingestion": {
+        "total_ms": 32738.919,
+        "documents_per_second": 30.545,
+        "chunks_total": 7774,
+        "parse_ms": {
+          "count": 1000,
+          "mean": 0.457,
+          "p50": 0.384,
+          "p95": 1.121,
+          "min": 0.123,
+          "max": 1.306
+        },
+        "chunk_ms": {
+          "count": 1000,
+          "mean": 1.949,
+          "p50": 1.564,
+          "p95": 5.242,
+          "min": 0.252,
+          "max": 6.897
+        },
+        "index_ms": {
+          "count": 1000,
+          "mean": 4.044,
+          "p50": 3.501,
+          "p95": 8.888,
+          "min": 0.939,
+          "max": 22.092
+        },
+        "per_document_ms": {
+          "count": 1000,
+          "mean": 18.375,
+          "p50": 14.122,
+          "p95": 40.269,
+          "min": 6.854,
+          "max": 119.15
+        }
+      },
+      "index": {
+        "source_bytes": 8739813,
+        "db_bytes": 19681280,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 19681280,
+        "fts_bytes": 2075124,
+        "total_bytes": 19681280
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 20.764,
+            "p50": 20.564,
+            "p95": 21.575,
+            "min": 20.091,
+            "max": 23.294
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 23.06,
+            "p50": 22.923,
+            "p95": 24.569,
+            "min": 21.748,
+            "max": 24.922
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 25.085,
+            "p50": 24.986,
+            "p95": 26.365,
+            "min": 24.144,
+            "max": 26.385
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": true,
+        "method": "psutil RSS sampled every 50 ms",
+        "note": "sampled_peak_rss_mb is the maximum of periodic process-RSS samples; rss_mb is the final sample. Neither is an OS high-water mark, and many consecutive samples may share the same value.",
+        "rss_mb": 164.316,
+        "sampled_peak_rss_mb": 164.336,
+        "tracemalloc_peak_mb": 3.546
+      },
+      "failures": []
+    },
+    {
+      "documents": 5000,
+      "chunks": 38709,
+      "corpus_fingerprint": "5f927b68f4376f397d53fccd6867ebfcc0af4b0f40e74f709da91a796e8b1467",
+      "ingestion": {
+        "total_ms": 123447.536,
+        "documents_per_second": 40.503,
+        "chunks_total": 38709,
+        "parse_ms": {
+          "count": 5000,
+          "mean": 0.459,
+          "p50": 0.391,
+          "p95": 1.127,
+          "min": 0.123,
+          "max": 1.71
+        },
+        "chunk_ms": {
+          "count": 5000,
+          "mean": 1.958,
+          "p50": 1.61,
+          "p95": 5.25,
+          "min": 0.25,
+          "max": 8.823
+        },
+        "index_ms": {
+          "count": 5000,
+          "mean": 4.175,
+          "p50": 3.645,
+          "p95": 9.131,
+          "min": 0.936,
+          "max": 31.127
+        },
+        "per_document_ms": {
+          "count": 5000,
+          "mean": 14.327,
+          "p50": 13.017,
+          "p95": 24.823,
+          "min": 6.906,
+          "max": 91.222
+        }
+      },
+      "index": {
+        "source_bytes": 43461977,
+        "db_bytes": 91484160,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 91484160,
+        "fts_bytes": 10340039,
+        "total_bytes": 91484160
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 98.716,
+            "p50": 97.964,
+            "p95": 101.859,
+            "min": 95.757,
+            "max": 106.368
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 102.922,
+            "p50": 101.193,
+            "p95": 114.235,
+            "min": 98.958,
+            "max": 117.782
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 103.405,
+            "p50": 102.874,
+            "p95": 105.975,
+            "min": 100.114,
+            "max": 107.283
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": true,
+        "method": "psutil RSS sampled every 50 ms",
+        "note": "sampled_peak_rss_mb is the maximum of periodic process-RSS samples; rss_mb is the final sample. Neither is an OS high-water mark, and many consecutive samples may share the same value.",
+        "rss_mb": 168.145,
+        "sampled_peak_rss_mb": 168.164,
+        "tracemalloc_peak_mb": 4.19
+      },
+      "failures": []
+    }
+  ],
+  "failures": [],
+  "limitations": [
+    "A single local machine measured these numbers; they are not a production throughput claim.",
+    "Working databases were written to a temporary directory and removed after the run; only aggregate measurements are kept.",
+    "The synthetic corpus is generated, so absolute retrieval quality is not meaningful here; the measurements characterise cost, not relevance.",
+    "Dense/reranker stages are only measured when their optional extras and model weights are installed."
+  ],
+  "notes": [
+    "Synthetic corpus; not representative of any specific production corpus.",
+    "Ingestion is synchronous and single-writer; timings reflect this prototype.",
+    "Latency scales with local CPU and is not extrapolated to other hardware.",
+    "Memory labels: rss_mb is one instantaneous process read, sampled_peak_rss_mb is the max of periodic process reads, and tracemalloc_peak_mb is a Python-managed allocation peak, not process RSS."
+  ]
+}

@@ -73,8 +73,8 @@ Three structural limits, each already visible at 5,000 documents:
    distributed transaction, no concurrent-ingest path, and no queue to absorb
    bursts.
 2. **One FTS5 index in one file.** Lexical search cost and index size live on the
-   machine that owns the file. BM25 latency already rises from ~4 ms at 687 chunks
-   to ~112 ms at 38,709 chunks (`measured here`) — see §5.
+   machine that owns the file. BM25 latency already rises from ~2.6 ms at 687
+   chunks to ~98 ms at 38,709 chunks (`measured here`) — see §5.
 3. **One exclusive vector store.** Qdrant local mode cannot be shared across
    processes or hosts, so dense/hybrid retrieval cannot scale out at all without
    replacing it.
@@ -90,24 +90,28 @@ is that the purpose changes at 10M documents.
 
 | Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index | Source text |
 |---:|---:|---:|---:|---:|---:|
-| 100 | 687 | 34.7 | 1.8 MB | 177 KB | 743 KB |
-| 1,000 | 7,774 | 38.2 | 18.8 MB | 2.0 MB | 8.3 MB |
-| 5,000 | 38,709 | 33.1 | 87.3 MB | 9.9 MB | 41.5 MB |
+| 100 | 687 | 14.3 | 1.8 MB | 177 KB | 743 KB |
+| 1,000 | 7,774 | 30.5 | 18.8 MB | 2.0 MB | 8.3 MB |
+| 5,000 | 38,709 | 40.5 | 87.2 MB | 9.9 MB | 41.5 MB |
+
+The smallest workload runs cold, so its 14.3 docs/s is a warm-up artefact rather
+than the steady-state rate; the 1,000- and 5,000-document workloads (30.5 and 40.5
+docs/s) are more representative.
 
 BM25 latency (ms, 20 queries per cell), `measured here`:
 
 | Documents | @10 p50 / p95 | @50 p50 / p95 | @100 p50 / p95 |
 |---:|---:|---:|---:|
-| 100 | 3.8 / 4.5 | 5.0 / 5.5 | 6.5 / 7.8 |
-| 1,000 | 21.1 / 22.8 | 22.9 / 23.6 | 26.3 / 36.6 |
-| 5,000 | 112.2 / 122.0 | 102.6 / 116.5 | 105.0 / 111.5 |
+| 100 | 2.6 / 3.2 | 4.0 / 4.3 | 5.4 / 5.9 |
+| 1,000 | 20.6 / 21.6 | 22.9 / 24.6 | 25.0 / 26.4 |
+| 5,000 | 98.0 / 101.9 | 101.2 / 114.2 | 102.9 / 106.0 |
 
 ### 4.2 Fixed-token chunking (`fixed_token`, 512/64 tokens, seed 0)
 
 | Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index |
 |---:|---:|---:|---:|---:|
-| 1,000 | 18,154 | 24.5 | 21.2 MB | 2.4 MB |
-| 5,000 | 90,470 | 21.6 | 97.3 MB | 11.8 MB |
+| 1,000 | 18,154 | 35.0 | 21.2 MB | 2.4 MB |
+| 5,000 | 90,470 | 33.8 | 97.3 MB | 11.8 MB |
 
 The larger token budget produced **more** chunks, not fewer, because fixed-token
 windows never cross a parsed block boundary: on paragraph-structured text the
@@ -118,12 +122,13 @@ dominates chunk count.**
 
 ### 4.3 What these numbers tell us
 
-- Indexing throughput is ~22–38 tiny documents per second, single-writer.
-  `measured here`
+- Indexing throughput is ~30–40 tiny documents per second at steady state
+  (`measured here`); the smallest, cold-start workload reports a lower 14.3 docs/s.
 - The SQLite file grows to ~2.36 KB per chunk (relational + FTS5) at 5,000
   documents; the FTS5 index alone is ~267 bytes per chunk. `measured here`
 - BM25 p50 grows roughly with corpus size for `or` queries that match many
-  documents — from 3.8 ms to 112 ms across a ~56× increase in chunks. `measured here`
+  documents — from ~2.6 ms to ~98 ms across a ~56× increase in chunks.
+  `measured here`
 
 ### 4.4 Memory measurements (three distinct labels)
 
@@ -157,8 +162,8 @@ Assume the "typical" shape of **10 million documents × 10 chunks = 100M chunks*
 | Chunk count | exact arithmetic under assumptions | 100,000,000 |
 | SQLite file at 2.36 KB/chunk | linear extrapolation of `measured here` | ~236 GB |
 | FTS5 index at 267 B/chunk | linear extrapolation of `measured here` | ~27 GB |
-| Naive BM25 p50 at 38,709-chunk p50 × scale | linear extrapolation of `measured here` | ~289 s per query |
-| Ingest time at ~35 docs/s, single writer | linear extrapolation of `measured here` | ~79 h |
+| Naive BM25 p50 at 38,709-chunk p50 × scale | linear extrapolation of `measured here` | ~253 s per query |
+| Ingest time at ~40 docs/s, single writer | linear extrapolation of `measured here` | ~69 h |
 
 The last two rows are the argument. A per-query latency in the hundreds of seconds
 and a multi-day single-writer bulk load are unacceptable, and adding cores does not
@@ -362,13 +367,35 @@ measured on production hardware.
 | Index freshness (ingest → searchable lag) | The visible effect of asynchronous ingestion | not measured |
 | Retrieval latency p50/p95/p99 **per stage** | Tail latency is additive across fan-out and rerank | measured here at small scale |
 | Recall@K / nDCG from the evaluation platform | A faster system that retrieves worse is not an improvement | measured (Phase 4 datasets) |
-| Index size per store | Directly drives the §6 capacity total | measured here + documented ratios |
+| Index size per store | Directly drives the §6 capacity total | measured here (FTS5) + assumed ratios |
 | Error rate (parse failures, poison docs, timeouts) | Distinguishes load problems from data problems | measured here (0 errors at small scale) |
 | Cost per 1k queries / per 1M chunks | Ties engineering choices to the bill | unknown |
 
 The evaluation platform (Phase 4) is the reusable piece here: it already turns a
 corpus and a query set into reproducible retrieval metrics, so the same harness can
 compare engines *before* a migration is trusted.
+
+### 8.2 Local HTTP load smoke test
+
+`rag-workbench scaling load-test` drives a **locally controlled** server over HTTP
+and reports throughput and tail latency for read-only endpoints. It uses only
+`httpx`; a warm-up phase is excluded and results are broken down **per endpoint**.
+One bounded run on the same machine (8 concurrent users, 5 s warm-up, 30 s
+measured, mixed read-only workload, `measured here`):
+
+| Metric | Value |
+|---|---:|
+| Requests (measured window) | 4,626 |
+| Throughput | ~154 req/s |
+| Errors | 0 |
+| Latency p50 / p95 | 36 ms / 132 ms |
+| Busiest endpoint (`/v1/search`) | 2,113 req, p50 35 ms, p95 125 ms |
+
+This is a **smoke-level, single-machine observation of HTTP/API throughput across
+endpoints — not RAG generation throughput, not retrieval throughput, and not a
+latency SLO.** Generation and dense retrieval are separate, opt-in paths with their
+own measurements; they are never folded into this number. The harness refuses to
+target the public demo.
 
 ---
 

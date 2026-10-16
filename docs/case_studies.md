@@ -40,17 +40,17 @@ real corpus, so its chunk-count ratios may not transfer. Measure on a real sampl
 
 ## Case 2 — `or` queries with common terms drive BM25 cost
 
-**Symptom.** BM25 p50 latency rose from ~4 ms at 687 chunks to ~112 ms at 38,709
+**Symptom.** BM25 p50 latency rose from ~2.6 ms at 687 chunks to ~98 ms at 38,709
 chunks (`measured here`), much faster than the ~56× growth in index size would
 suggest for a well-behaved index scan.
 
-**Evidence** (`scale-20261016T092334.json`):
+**Evidence** (`scale-20261016T112013.json`):
 
 | Chunks | @10 p50 | @100 p50 |
 |---:|---:|---:|
-| 687 | 3.8 ms | 6.5 ms |
-| 7,774 | 21.1 ms | 26.3 ms |
-| 38,709 | 112.2 ms | 105.0 ms |
+| 687 | 2.6 ms | 5.4 ms |
+| 7,774 | 20.6 ms | 25.0 ms |
+| 38,709 | 98.0 ms | 102.9 ms |
 
 **Root cause.** The generated queries combine a document-distinctive token with a
 common corpus term. Under `query_mode="or"`, the common term matches a large
