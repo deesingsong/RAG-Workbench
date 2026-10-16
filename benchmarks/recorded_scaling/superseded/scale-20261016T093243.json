@@ -278,7 +278,7 @@
   "failures": [],
   "limitations": [
     "A single local machine measured these numbers; they are not a production throughput claim.",
-    "Working databases were written under C:\\Users\\jofar\\AppData\\Local\\Temp\\rw_scaling_3q807k8c and removed after the run; only aggregate measurements are kept.",
+    "Working databases were written under a temporary directory and removed after the run; only aggregate measurements are kept.",
     "The synthetic corpus is generated, so absolute retrieval quality is not meaningful here; the measurements characterise cost, not relevance.",
     "Dense/reranker stages are only measured when their optional extras and model weights are installed."
   ],
