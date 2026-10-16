@@ -21,6 +21,7 @@ from rag_workbench.api.routes import (
     documents,
     evaluation,
     health,
+    owner,
     scaling,
     search,
     vectors,
@@ -37,6 +38,9 @@ from rag_workbench.domain.errors import (
     GeneratorUnavailableError,
     IngestionError,
     NotFoundError,
+    OwnerAuthError,
+    OwnerEvaluationsDisabledError,
+    OwnerLimitError,
     ParsingError,
     RagWorkbenchError,
     ReadOnlyModeError,
@@ -48,6 +52,7 @@ from rag_workbench.domain.errors import (
     ValidationError,
     VectorStoreError,
 )
+from rag_workbench.evaluation.owner import OwnerEvaluationService
 from rag_workbench.evaluation.service import EvaluationService
 from rag_workbench.ingestion.pipeline import IngestionService
 from rag_workbench.ingestion.sample import seed_bundled_sample
@@ -79,6 +84,9 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     ReadOnlyModeError: 403,
     GenerationError: 400,
     GeneratorUnavailableError: 503,
+    OwnerAuthError: 401,
+    OwnerEvaluationsDisabledError: 403,
+    OwnerLimitError: 422,
 }
 
 
@@ -119,6 +127,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.evaluation_service = EvaluationService(
         database, settings, app.state.ingestion_service, app.state.search_service
     )
+    app.state.owner_evaluation_service = OwnerEvaluationService(
+        settings, app.state.evaluation_service
+    )
     app.state.answer_service = AnswerService(
         database, settings, app.state.search_service
     )
@@ -154,6 +165,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(search.router, prefix="/v1")
     app.include_router(vectors.router, prefix="/v1")
     app.include_router(evaluation.router, prefix="/v1")
+    app.include_router(owner.router, prefix="/v1")
     app.include_router(answer.router, prefix="/v1")
     app.include_router(scaling.router, prefix="/v1")
     return app

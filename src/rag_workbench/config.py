@@ -293,6 +293,34 @@ class Settings(BaseSettings):
     # harness refuses to generate/index more than this many synthetic documents.
     scaling_max_documents: int = Field(default=20000, ge=1, le=1000000)
 
+    # Laboratory Controls (runtime enable/disable of evaluation, generation and
+    # ingestion). These are *not* global feature toggles: whether an operation is
+    # switched on within a browser session is Streamlit session state, and the
+    # backend never reads it. What lives here is what the deployment *permits*,
+    # and the backend enforces it regardless of any UI toggle.
+    #
+    # Optional, narrowly scoped owner evaluations for a hosted deployment that is
+    # otherwise read-only. Disabled by default and only usable when a secret token
+    # is configured outside the repository. The token is compared in constant time
+    # and is never returned by any API response or written to a log.
+    owner_evaluations_enabled: bool = False
+    owner_test_token: str | None = None
+    # Server-side bounds for owner evaluations, enforced independently of the
+    # request. Only these bundled datasets may be evaluated, BM25 only.
+    owner_allowed_datasets: tuple[str, ...] = ("legal-contracts",)
+    owner_eval_max_queries: int = Field(default=20, ge=1, le=100)
+    owner_eval_max_candidate_depth: int = Field(default=100, ge=1, le=200)
+    owner_eval_max_top_k: int = Field(default=10, ge=1, le=50)
+    owner_eval_max_documents: int = Field(default=50, ge=1, le=1000)
+    owner_eval_max_concurrency: int = Field(default=1, ge=1, le=4)
+    owner_eval_max_runtime_s: float = Field(default=60.0, gt=0, le=600)
+
+    @property
+    def owner_token_configured(self) -> bool:
+        """Whether an owner test token is present, without ever revealing it."""
+
+        return bool(self.owner_test_token and self.owner_test_token.strip())
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

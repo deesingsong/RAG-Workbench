@@ -53,6 +53,12 @@ def on_disk_revision() -> tuple[str | None, str]:
 # local API; a single-process host starts the API in-process instead.
 API_URL = "http://127.0.0.1:8000"
 READ_ONLY = False
+# Session-enabled laboratory controls. These are per-browser-session preferences
+# only; the backend remains the authority and enforces permissions regardless of
+# these flags. They are recomputed on every rerun from st.session_state.
+LAB_EVAL_ENABLED = False
+LAB_GENERATION_ENABLED = False
+LAB_INGESTION_ENABLED = False
 TIMEOUT = 60.0
 
 st.set_page_config(page_title="RAG Workbench", page_icon="🔎", layout="wide")
@@ -113,12 +119,80 @@ def render_status() -> None:
     st.caption(f"API: {API_URL} • database: {body.get('database')} • version {body.get('version')}")
 
 
+def _laboratory_control(
+    display: str,
+    capability: dict,
+    state_key: str,
+    *,
+    available_label: str,
+    unavailable_label: str,
+) -> None:
+    """One session toggle + status line (available / permitted / session-enabled)."""
+
+    available = bool(capability.get("available"))
+    permitted = bool(capability.get("permitted"))
+    if not permitted:
+        # Never let a stale session flag imply a permission the backend refuses.
+        st.session_state[state_key] = False
+    st.checkbox(f"Enable {display.lower()}", key=state_key, disabled=not permitted)
+    enabled = permitted and bool(st.session_state.get(state_key, False))
+    word = available_label if available else unavailable_label
+    st.caption(f"{display}: {word} — {'On' if enabled else 'Off'}")
+    reason = capability.get("reason")
+    if reason and (not permitted or not available):
+        st.caption(f"⚠ {reason}")
+
+
+def render_laboratory_controls(cfg: dict) -> None:
+    """Session-only Laboratory Controls (never global deployment configuration)."""
+
+    laboratory = cfg.get("laboratory") or {} if isinstance(cfg, dict) else {}
+    with st.sidebar.expander("Laboratory Controls", expanded=False):
+        st.caption(
+            "Per-session switches. They change only what this browser session runs, "
+            "never the deployment's configuration or permissions."
+        )
+        _laboratory_control(
+            "Evaluation runs",
+            laboratory.get("evaluation", {}),
+            "lab_eval_enabled",
+            available_label="Available",
+            unavailable_label="Unavailable",
+        )
+        _laboratory_control(
+            "Live generation",
+            laboratory.get("generation", {}),
+            "lab_generation_enabled",
+            available_label="Ollama available",
+            unavailable_label="Ollama unavailable",
+        )
+        _laboratory_control(
+            "Document ingestion",
+            laboratory.get("ingestion", {}),
+            "lab_ingestion_enabled",
+            available_label="Available",
+            unavailable_label="Unavailable",
+        )
+        owner = laboratory.get("owner_evaluation", {})
+        if owner:
+            st.caption(
+                "Owner evaluations: "
+                + ("permitted" if owner.get("permitted") else "not permitted")
+                + (" (available)" if owner.get("available") else "")
+            )
+
+
 def render_corpus() -> None:
     st.header("Corpus manager")
     if READ_ONLY:
         st.info(
             "Read-only demo: document ingestion and index rebuilds are disabled. "
             "The bundled sample corpus is seeded by the backend itself at startup."
+        )
+    elif not LAB_INGESTION_ENABLED:
+        st.info(
+            "Document ingestion is available but switched off for this session. "
+            "Enable it in the sidebar under Laboratory Controls."
         )
     else:
         with st.form("upload", clear_on_submit=True):
@@ -637,6 +711,12 @@ def _render_run_form() -> None:
             "recorded experiments are shown below."
         )
         return
+    if not LAB_EVAL_ENABLED:
+        st.info(
+            "Evaluation runs are available but switched off for this session. "
+            "Enable them in the sidebar under Laboratory Controls."
+        )
+        return
     datasets = _fetch_datasets()
     profiles = _profile_options()
     if not datasets:
@@ -776,6 +856,56 @@ def _render_deployment_diagnostics() -> None:
             )
 
 
+def _render_owner_panel() -> None:
+    """Authenticated, server-bounded evaluation for the deployment owner.
+
+    Appears only when the backend explicitly permits hosted owner evaluations. The
+    token is entered per session, sent only as an ``X-Owner-Token`` header and
+    never stored in the URL, diagnostics or a log. The backend re-authorizes every
+    request and enforces the bounds; this panel merely calls the endpoint.
+    """
+
+    status, cfg = api_get("/v1/config")
+    if status != 200 or not isinstance(cfg, dict):
+        return
+    owner = ((cfg.get("laboratory") or {}).get("owner_evaluation")) or {}
+    if not owner.get("permitted"):
+        return
+    policy = cfg.get("owner_evaluation_policy") or {}
+    allowed = policy.get("allowed_datasets") or []
+    max_queries = int(policy.get("max_queries", 20))
+    with st.expander("Owner testing (bounded, authenticated)"):
+        st.caption(
+            "Optional authenticated evaluation for the deployment owner. Bounds are "
+            f"enforced by the backend: BM25 only, datasets {', '.join(allowed) or '—'}, "
+            f"max {max_queries} queries, candidate depth "
+            f"{policy.get('max_candidate_depth')}, {policy.get('max_runtime_s')}s budget."
+        )
+        token = st.text_input("Owner test token", type="password", key="lab_owner_token")
+        dataset = st.selectbox(
+            "Bundled dataset",
+            allowed or ["legal-contracts"],
+            key="lab_owner_dataset",
+        )
+        queries = st.slider(
+            "Max queries", 1, max_queries, min(5, max_queries), key="lab_owner_queries"
+        )
+        if st.button("Run bounded owner evaluation", key="lab_owner_run"):
+            if not token.strip():
+                st.error("Enter the owner test token configured for this deployment.")
+            else:
+                result_status, body = api_post(
+                    "/v1/owner/evaluations",
+                    headers={"X-Owner-Token": token},
+                    json={"dataset": dataset, "max_queries": int(queries)},
+                )
+                if result_status == 200 and isinstance(body, dict):
+                    st.success(f"Owner evaluation {body.get('experiment_id')}")
+                    _render_experiment_detail(body)
+                else:
+                    st.error(f"Owner evaluation failed ({result_status}): {body}")
+
+
 def render_evaluation_lab() -> None:
     st.header("Evaluation Lab")
     st.caption(
@@ -788,6 +918,7 @@ def render_evaluation_lab() -> None:
             "Read-only deployment: new runs are disabled. Recorded benchmark "
             "experiments committed to the repository are shown below."
         )
+    _render_owner_panel()
     _render_dataset_browser()
     st.divider()
     _render_run_form()
@@ -1118,11 +1249,23 @@ def render_answer_lab() -> None:
     _render_answer_quality()
     st.divider()
 
-    if READ_ONLY or not (isinstance(cfg, dict) and cfg.get("generation_enabled")):
+    lab_generation = (
+        ((cfg.get("laboratory") or {}).get("generation")) if isinstance(cfg, dict) else {}
+    ) or {}
+    generation_permitted = isinstance(cfg, dict) and bool(
+        cfg.get("generation_enabled")
+    ) and not READ_ONLY and bool(lab_generation.get("permitted", False))
+    if not generation_permitted:
         st.info(
-            "Live generation is disabled on this deployment. The recorded answer "
+            lab_generation.get("reason")
+            or "Live generation is disabled on this deployment. The recorded answer "
             "demonstrations below were produced locally with a real local model and "
             "committed as artifacts."
+        )
+    elif not LAB_GENERATION_ENABLED:
+        st.info(
+            "Live generation is available but switched off for this session. Enable "
+            "it in the sidebar under Laboratory Controls."
         )
     else:
         with st.form("answer-form"):
@@ -1679,9 +1822,15 @@ PAGES = {
 
 def main() -> None:
     global API_URL, READ_ONLY
+    global LAB_EVAL_ENABLED, LAB_GENERATION_ENABLED, LAB_INGESTION_ENABLED
     API_URL = resolve_api_url()
     READ_ONLY = server_is_read_only(API_URL)
     seed_note = None if READ_ONLY else seed_sample_if_empty(API_URL)
+
+    config_status, config_body = api_get("/v1/config")
+    config = config_body if config_status == 200 and isinstance(config_body, dict) else {}
+    for key in ("lab_eval_enabled", "lab_generation_enabled", "lab_ingestion_enabled"):
+        st.session_state.setdefault(key, False)
 
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption(
@@ -1696,6 +1845,19 @@ def main() -> None:
         )
     if seed_note:
         st.sidebar.caption(seed_note)
+    render_laboratory_controls(config)
+
+    laboratory = (config.get("laboratory") or {}) if config else {}
+    LAB_EVAL_ENABLED = bool(
+        laboratory.get("evaluation", {}).get("permitted")
+    ) and bool(st.session_state.get("lab_eval_enabled"))
+    LAB_GENERATION_ENABLED = bool(
+        laboratory.get("generation", {}).get("permitted")
+    ) and bool(st.session_state.get("lab_generation_enabled"))
+    LAB_INGESTION_ENABLED = bool(
+        laboratory.get("ingestion", {}).get("permitted")
+    ) and bool(st.session_state.get("lab_ingestion_enabled"))
+
     page = st.sidebar.radio("Navigate", list(PAGES.keys()))
     st.title("Retrieval Laboratory")
     PAGES[page]()

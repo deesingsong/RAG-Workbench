@@ -45,6 +45,7 @@ excluded from every aggregate and from latency.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -101,6 +102,11 @@ class EvalRunConfig(BaseModel):
     label: str | None = None
     subset: bool = False
     related_baseline: str | None = None
+    #: Optional wall-clock budget, in seconds. When set, the runner aborts with
+    #: an :class:`EvaluationError` once the budget is exceeded between queries.
+    #: Used by the bounded owner-evaluation path; ``None`` (the default) leaves
+    #: ordinary local runs unbounded.
+    max_runtime_s: float | None = Field(default=None, gt=0, le=600)
     #: Skip retrieval entirely for queries with no relevance judgments. Such a
     #: query can never produce a metric, so retrieving it only wastes work; the
     #: explicit policy keeps evaluation cost proportional to the judged set.
@@ -257,9 +263,20 @@ class EvaluationRunner:
                 "(not directly comparable to full-corpus results)"
             )
 
+        deadline = (
+            time.monotonic() + config.max_runtime_s
+            if config.max_runtime_s is not None
+            else None
+        )
         outcomes: list[QueryOutcome] = []
         skipped_unjudged = 0
         for query in queries:
+            if deadline is not None and time.monotonic() > deadline:
+                raise EvaluationError(
+                    "evaluation exceeded its "
+                    f"{config.max_runtime_s:.0f}s runtime budget after "
+                    f"{len(outcomes)} of {len(queries)} queries"
+                )
             relevance = dataset.relevance_for(query.id)
             if config.skip_unjudged and not relevance:
                 # Retrieval is skipped: an unjudged query has no metric, and (for

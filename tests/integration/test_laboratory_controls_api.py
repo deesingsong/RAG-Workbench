@@ -1,0 +1,218 @@
+"""API tests for Laboratory Controls (availability, permission, owner mode).
+
+Covers the backend half of the three-state model -- *available* vs *permitted* --
+plus the optional authenticated owner boundary. The per-session toggle is
+Streamlit state and is deliberately absent from these responses: there is no
+global switch a request could flip.
+"""
+
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from rag_workbench.answering.ollama import probe_generation
+from rag_workbench.api.app import create_app
+from rag_workbench.config import Settings
+
+OWNER_TOKEN = "unit-owner-token-not-a-real-secret"
+OWNER_HEADER = {"X-Owner-Token": OWNER_TOKEN}
+
+
+def _client(tmp_path, **overrides):
+    settings = Settings(data_dir=tmp_path, log_level="WARNING", _env_file=None, **overrides)
+    return TestClient(create_app(settings))
+
+
+def test_config_reports_independent_capabilities(tmp_path) -> None:
+    with _client(tmp_path) as client:
+        cfg = client.get("/v1/config").json()
+    lab = cfg["laboratory"]
+    # Locally writable: evaluation and ingestion are permitted.
+    assert lab["evaluation"]["permitted"] is True
+    assert lab["ingestion"]["permitted"] is True
+    # Generation is off by default and explains the required configuration.
+    assert lab["generation"]["available"] is False
+    assert lab["generation"]["permitted"] is False
+    assert "RAG_WORKBENCH_GENERATION_ENABLED" in lab["generation"]["reason"]
+    # Owner mode is off by default.
+    assert lab["owner_evaluation"]["permitted"] is False
+    assert "RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED" in lab["owner_evaluation"]["reason"]
+    # Session-enabled is a frontend concept and must never appear in the payload.
+    assert "session_enabled" not in cfg
+    assert "session" not in {key.lower() for key in lab["evaluation"]}
+
+
+def test_read_only_disables_evaluation_and_ingestion_permission(tmp_path) -> None:
+    with _client(tmp_path, read_only=True) as client:
+        cfg = client.get("/v1/config").json()
+    assert cfg["read_only"] is True
+    assert cfg["laboratory"]["evaluation"]["permitted"] is False
+    assert cfg["laboratory"]["ingestion"]["permitted"] is False
+    assert "public visitors" in cfg["laboratory"]["evaluation"]["reason"]
+
+
+def test_generation_probe_disabled_and_unreachable(tmp_path) -> None:
+    disabled = Settings(data_dir=tmp_path, log_level="WARNING", _env_file=None)
+    assert probe_generation(disabled) == {
+        "available": False,
+        "detail": "live generation is disabled",
+    }
+
+    # Enabled but no Ollama listening: a probe must report unavailable, not raise.
+    unreachable = Settings(
+        data_dir=tmp_path,
+        log_level="WARNING",
+        generation_enabled=True,
+        ollama_base_url="http://127.0.0.1:1",
+        _env_file=None,
+    )
+    result = probe_generation(unreachable, timeout_s=1.0)
+    assert result["available"] is False
+    assert result["detail"]
+
+
+def test_anonymous_mutations_refused_in_read_only(tmp_path) -> None:
+    with _client(tmp_path, read_only=True) as client:
+        payload = {"dataset": "legal-contracts", "profile_id": "p-does-not-exist"}
+        assert client.post("/v1/evaluations", json=payload).status_code == 403
+        assert client.post("/v1/owner/evaluations", json={}).status_code == 403
+        assert (
+            client.post(
+                "/v1/documents",
+                files={"file": ("a.txt", b"hello world")},
+                data={"collection": "c"},
+            ).status_code
+            == 403
+        )
+        assert client.post("/v1/answer", json={"question": "q"}).status_code == 403
+
+
+def test_owner_disabled_refuses_even_with_a_valid_token(tmp_path) -> None:
+    with _client(tmp_path, owner_test_token=OWNER_TOKEN) as client:
+        response = client.post("/v1/owner/evaluations", json={}, headers=OWNER_HEADER)
+    assert response.status_code == 403
+    assert response.json()["error"] == "owner_evaluations_disabled"
+
+
+def test_owner_enabled_requires_a_valid_token(tmp_path) -> None:
+    with _client(
+        tmp_path, owner_evaluations_enabled=True, owner_test_token=OWNER_TOKEN
+    ) as client:
+        assert client.post("/v1/owner/evaluations", json={}).status_code == 401
+        wrong = client.post(
+            "/v1/owner/evaluations", json={}, headers={"X-Owner-Token": "wrong"}
+        )
+        assert wrong.status_code == 401
+        assert wrong.json()["error"] == "owner_unauthorized"
+        # A wrong token never reveals the configured value.
+        assert OWNER_TOKEN not in wrong.text
+
+
+def test_owner_enabled_without_a_configured_token_is_unusable(tmp_path) -> None:
+    with _client(tmp_path, owner_evaluations_enabled=True) as client:
+        response = client.post("/v1/owner/evaluations", json={}, headers=OWNER_HEADER)
+    assert response.status_code == 401
+    assert response.json()["error"] == "owner_unauthorized"
+
+
+def test_owner_evaluation_runs_bounded_bm25(tmp_path) -> None:
+    with _client(
+        tmp_path,
+        owner_evaluations_enabled=True,
+        owner_test_token=OWNER_TOKEN,
+        owner_eval_max_queries=20,
+        owner_eval_max_top_k=10,
+    ) as client:
+        capabilities = client.get("/v1/owner/capabilities", headers=OWNER_HEADER)
+        assert capabilities.status_code == 200
+        assert capabilities.json()["policy"]["modes"] == ["bm25"]
+
+        response = client.post(
+            "/v1/owner/evaluations",
+            json={"max_queries": 5},
+            headers=OWNER_HEADER,
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["experiment_id"]
+    config = body["config"]
+    assert config["mode"] == "bm25"
+    assert config["rerank"] is False
+    assert config["max_queries"] == 5
+    assert config["max_runtime_s"] > 0
+    assert body["counts"]["queries_run"] == 5
+
+
+def test_owner_evaluation_rejects_inputs_over_the_bounds(tmp_path) -> None:
+    with _client(
+        tmp_path,
+        owner_evaluations_enabled=True,
+        owner_test_token=OWNER_TOKEN,
+        owner_eval_max_queries=5,
+    ) as client:
+        # Above the configured policy bound: a typed owner-limit error.
+        over_queries = client.post(
+            "/v1/owner/evaluations", json={"max_queries": 6}, headers=OWNER_HEADER
+        )
+        assert over_queries.status_code == 422
+        assert over_queries.json()["error"] == "owner_limit_exceeded"
+
+        # Above the absolute schema ceiling: a request validation error.
+        schema_over = client.post(
+            "/v1/owner/evaluations", json={"max_queries": 999}, headers=OWNER_HEADER
+        )
+        assert schema_over.status_code == 422
+
+        disallowed = client.post(
+            "/v1/owner/evaluations", json={"dataset": "scifact"}, headers=OWNER_HEADER
+        )
+        assert disallowed.status_code == 422
+        assert disallowed.json()["error"] == "owner_limit_exceeded"
+
+
+def test_owner_evaluation_works_while_deployment_is_read_only(tmp_path) -> None:
+    with _client(
+        tmp_path,
+        read_only=True,
+        owner_evaluations_enabled=True,
+        owner_test_token=OWNER_TOKEN,
+    ) as client:
+        # Anonymous still refused ...
+        assert client.post("/v1/evaluations", json={}).status_code == 403
+        # ... while the authenticated owner may run a bounded evaluation.
+        response = client.post(
+            "/v1/owner/evaluations",
+            json={"max_queries": 3},
+            headers=OWNER_HEADER,
+        )
+        assert response.status_code == 200
+        # ... and the deployment's read-only permission is unchanged.
+        assert client.get("/v1/config").json()["read_only"] is True
+
+
+def test_requests_never_mutate_deployment_permissions(tmp_path) -> None:
+    """No request flips a process-wide toggle: read-only stays read-only."""
+
+    with _client(tmp_path, read_only=True) as client:
+        before = client.get("/v1/config").json()
+        client.post("/v1/evaluations", json={"dataset": "x", "profile_id": "y"})
+        client.post("/v1/owner/evaluations", json={})
+        client.post("/v1/documents", files={"file": ("a.txt", b"x")}, data={"collection": "c"})
+        after = client.get("/v1/config").json()
+    assert before["read_only"] is after["read_only"] is True
+    assert before["laboratory"] == after["laboratory"]
+
+
+def test_config_never_exposes_the_owner_token(tmp_path) -> None:
+    with _client(
+        tmp_path,
+        owner_evaluations_enabled=True,
+        owner_test_token=OWNER_TOKEN,
+    ) as client:
+        config = client.get("/v1/config")
+        capabilities = client.get("/v1/owner/capabilities", headers=OWNER_HEADER)
+    assert config.status_code == 200
+    assert OWNER_TOKEN not in config.text
+    assert capabilities.status_code == 200
+    assert OWNER_TOKEN not in capabilities.text
+    assert config.json()["owner_token_configured"] is True

@@ -126,6 +126,24 @@ class ReadOnlyModeError(RagWorkbenchError):
     code = "read_only_mode"
 
 
+class OwnerAuthError(RagWorkbenchError):
+    """An owner-only request lacked a valid, configured owner test token."""
+
+    code = "owner_unauthorized"
+
+
+class OwnerEvaluationsDisabledError(RagWorkbenchError):
+    """Owner evaluations were requested but are not enabled on this deployment."""
+
+    code = "owner_evaluations_disabled"
+
+
+class OwnerLimitError(RagWorkbenchError):
+    """An owner evaluation exceeded one of the server-side bounds."""
+
+    code = "owner_limit_exceeded"
+
+
 class GenerationError(RagWorkbenchError):
     """Answer generation was requested but could not be completed."""
 

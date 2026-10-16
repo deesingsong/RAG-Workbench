@@ -7,6 +7,7 @@ envelopes and error shapes but no business logic.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -257,6 +258,23 @@ class EvaluationRunRequest(BaseModel):
     related_baseline: str | None = None
 
 
+class OwnerEvaluationRequest(BaseModel):
+    """A bounded owner-evaluation request (Laboratory Controls §5/§6).
+
+    Deliberately narrow: no retrieval mode, no reranking and no profile choice.
+    The server forces BM25 and enforces the stricter configured bounds; the
+    field ceilings here mirror the absolute maxima so an oversized request is a
+    validation error before any work starts.
+    """
+
+    dataset: str | None = None
+    query_mode: Literal["and", "or"] = "or"
+    max_queries: int | None = Field(default=None, ge=1, le=100)
+    candidate_depth: int | None = Field(default=None, ge=1, le=200)
+    top_k: int | None = Field(default=None, ge=1, le=50)
+    label: str | None = Field(default=None, max_length=120)
+
+
 class ExperimentSummary(BaseModel):
     experiment_id: str
     source: str
@@ -307,6 +325,13 @@ class AppConfigResponse(BaseModel):
     recorded_scaling_dir: str = ""
     recorded_scaling_exists: bool = False
     scaling_max_documents: int = 0
+    # Laboratory Controls: per-capability availability/permission (never the
+    # session toggle, which belongs to the frontend) and the non-sensitive owner
+    # policy. No token or credential is ever included.
+    laboratory: dict = {}
+    owner_evaluations_enabled: bool = False
+    owner_token_configured: bool = False
+    owner_evaluation_policy: dict = {}
 
 
 __all__ = [
@@ -324,6 +349,7 @@ __all__ = [
     "HealthResponse",
     "IngestionJobResponse",
     "IngestionResult",
+    "OwnerEvaluationRequest",
     "ProfileListResponse",
     "SearchRequest",
     "SearchResponse",

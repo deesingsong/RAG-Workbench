@@ -34,6 +34,18 @@ from rag_workbench.ingestion.optional import dense_feature_available
 router = APIRouter()
 
 
+def _capability(*, available: bool, permitted: bool, reason: str) -> dict[str, object]:
+    """One non-sensitive capability status for ``/v1/config`` (Laboratory Controls §8).
+
+    ``available`` is whether the dependency/model exists, ``permitted`` is whether
+    the deployment's configuration and authorization policy allow the operation.
+    The *session-enabled* state lives only in the frontend and is never reported
+    here, so it can never be confused with a deployment permission.
+    """
+
+    return {"available": bool(available), "permitted": bool(permitted), "reason": reason}
+
+
 @router.get("/datasets", response_model=DatasetListResponse, tags=["evaluation"])
 def list_datasets(
     service: EvaluationService = Depends(get_evaluation_service),
@@ -189,6 +201,69 @@ def app_config(
     answer_demos = load_answer_demos(settings.recorded_answers_dir)
     scaling_service = request.app.state.scaling_service
     scaling_benchmarks = scaling_service.list_benchmarks()
+    owner_service = request.app.state.owner_evaluation_service
+    generation_available = bool(generation.get("available"))
+
+    # Laboratory Controls capability status: available vs permitted, with a clear
+    # reason when an operation cannot be enabled. Session-enabled is frontend-only.
+    eval_available = True  # BM25 retrieval and the bundled datasets ship in core
+    eval_capability = _capability(
+        available=eval_available,
+        permitted=not settings.read_only,
+        reason=(
+            "evaluation runs are disabled for public visitors"
+            if settings.read_only
+            else ""
+        ),
+    )
+    if not settings.generation_enabled:
+        generation_reason = (
+            "live generation requires an Ollama server; set "
+            "RAG_WORKBENCH_GENERATION_ENABLED=true and run Ollama to enable it"
+        )
+    elif settings.read_only:
+        generation_reason = "live generation is disabled for public visitors"
+    elif not generation_available:
+        generation_reason = str(
+            generation.get("detail") or "no local model is currently available"
+        )
+    else:
+        generation_reason = ""
+    generation_capability = _capability(
+        available=generation_available,
+        permitted=(
+            settings.generation_enabled
+            and not settings.read_only
+            and generation_available
+        ),
+        reason=generation_reason,
+    )
+    ingestion_capability = _capability(
+        available=True,
+        permitted=not settings.read_only,
+        reason=(
+            "document ingestion is disabled for public visitors"
+            if settings.read_only
+            else ""
+        ),
+    )
+    if not settings.owner_evaluations_enabled:
+        owner_reason = (
+            "owner evaluations are disabled; set "
+            "RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true to enable them"
+        )
+    elif not settings.owner_token_configured:
+        owner_reason = (
+            "no owner test token is configured; set RAG_WORKBENCH_OWNER_TEST_TOKEN"
+        )
+    else:
+        owner_reason = ""
+    owner_capability = _capability(
+        available=settings.owner_token_configured,
+        permitted=settings.owner_evaluations_enabled and settings.owner_token_configured,
+        reason=owner_reason,
+    )
+
     return {
         "read_only": settings.read_only,
         "autoseed_sample": settings.autoseed_sample,
@@ -231,4 +306,16 @@ def app_config(
         "recorded_scaling_dir": str(settings.recorded_scaling_dir),
         "recorded_scaling_exists": settings.recorded_scaling_dir.is_dir(),
         "scaling_max_documents": settings.scaling_max_documents,
+        # Laboratory Controls (runtime capability status) and the optional owner
+        # evaluation boundary. Only non-sensitive facts are exposed; the owner
+        # token itself is never included.
+        "laboratory": {
+            "evaluation": eval_capability,
+            "generation": generation_capability,
+            "ingestion": ingestion_capability,
+            "owner_evaluation": owner_capability,
+        },
+        "owner_evaluations_enabled": settings.owner_evaluations_enabled,
+        "owner_token_configured": settings.owner_token_configured,
+        "owner_evaluation_policy": owner_service.policy.summary(),
     }

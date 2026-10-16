@@ -92,6 +92,15 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
   Generation is refused in read-only mode and when it is disabled, so the public
   demo — which serves **recorded** answer runs and a grounded-answer quality
   report — never becomes a model endpoint.
+- **Laboratory Controls** — a per-session sidebar panel that switches evaluation
+  runs, live generation and document ingestion on or off *without editing
+  configuration*. Three states stay distinct: *available* (the dependency/model is
+  present), *permitted* (the deployment's configuration and authorization allow
+  it) and *session-enabled* (the visitor's own toggle, held only in Streamlit
+  session state). A toggle never bypasses backend authorization — a read-only
+  deployment still returns `403` for a privileged request. An optional
+  **authenticated owner mode** lets the operator run small, server-bounded BM25
+  evaluations while the public deployment remains read-only.
 - **Scalability engineering** (Phase 6): a bounded, reproducible **performance
   harness** over a deterministic synthetic corpus (ingestion throughput, on-disk
   footprint and BM25 latency by corpus size), a **deterministic capacity model**
@@ -409,6 +418,15 @@ Cloud runs one Streamlit process and cannot run a separate FastAPI process:
   `git`, `git-file` or `source-hash`) and compares the revision to the source
   tree on disk. If a hot reload left an older backend process running, the
   mismatch appears as a warning instead of the app silently serving stale code.
+- The **Laboratory Controls** panel is per-session and cannot grant a permission
+  the backend refuses. In read-only mode its evaluation/generation/ingestion
+  toggles are disabled and explain why, and the public app still returns `403`
+  for every privileged request. Optionally, an operator may enable the
+  authenticated **owner mode** (`RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true`
+  plus a `RAG_WORKBENCH_OWNER_TEST_TOKEN` secret) to run small, server-bounded
+  BM25 evaluations on the bundled `legal-contracts` dataset while the deployment
+  stays read-only for everyone else. The token is sent only as an
+  `X-Owner-Token` header, compared in constant time and never logged or returned.
 
 To deploy:
 
@@ -431,6 +449,9 @@ To deploy:
    ```toml
    RAG_WORKBENCH_READ_ONLY = "true"
    RAG_WORKBENCH_AUTOSEED_SAMPLE = "true"
+   # Optional, for the authenticated owner mode:
+   # RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"
+   # RAG_WORKBENCH_OWNER_TEST_TOKEN = "<a long random secret kept outside the repo>"
    ```
 
 Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
@@ -497,6 +518,15 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
 | `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
 | `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality reports for the read-only demo. |
+| `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED` | `false` | Explicit opt-in for the hosted, authenticated owner evaluation endpoint. Off by default. |
+| `RAG_WORKBENCH_OWNER_TEST_TOKEN` | unset | Secret compared in constant time for owner requests (`X-Owner-Token` header). Configure outside the repo; never logged or returned. |
+| `RAG_WORKBENCH_OWNER_ALLOWED_DATASETS` | `["legal-contracts"]` | Bundled datasets a bounded owner evaluation may use (JSON array). |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_QUERIES` | `20` | Server-side cap on queries per owner evaluation. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_CANDIDATE_DEPTH` | `100` | Server-side cap on candidate depth for owner evaluations. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_TOP_K` | `10` | Server-side cap on `top_k` for owner evaluations. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_DOCUMENTS` | `50` | Cap on documents ingested from the trusted fixture before an owner evaluation. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_CONCURRENCY` | `1` | Maximum concurrently running owner evaluation jobs. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_RUNTIME_S` | `60` | Wall-clock budget for one owner evaluation; exceeding it raises `400`. |
 
 ---
 
@@ -627,11 +657,13 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/vectors/status?profile_id=` | Reconcile vector points against SQLite chunks. |
 | `POST` | `/v1/vectors/rebuild` | `{profile_id?}` or `{all_profiles: true}` → rebuild from SQLite. |
 | `POST` | `/v1/vectors/reconcile` | `{profile_id, repair}` → detect and optionally repair drift. |
-| `GET` | `/v1/config` | Deployment capabilities: `read_only`, dense/rerank availability, default eval cut-offs, and the build identity (`version` plus a `revision`/`revision_source`). |
+| `GET` | `/v1/config` | Deployment capabilities: `read_only`, dense/rerank availability, default eval cut-offs, the build identity (`version` plus a `revision`/`revision_source`), and a `laboratory` block giving each capability's `available`/`permitted` state + reason (never the session toggle). |
 | `GET` | `/v1/datasets` | List bundled and imported evaluation datasets with counts. |
 | `GET` | `/v1/datasets/{name}` | One dataset's manifest summary. |
 | `POST` | `/v1/datasets/ingest` | `{dataset, strategy?, max_tokens?, embed?, …}` → ingest a corpus into an index profile. |
 | `POST` | `/v1/evaluations` | `{dataset, profile_id, mode, query_mode?, candidate_depth?, top_k, k_values?, rerank?, rerank_candidates?, …}` → run and persist an evaluation. |
+| `GET` | `/v1/owner/capabilities` | Owner-only: the enforced evaluation bounds (never the token). |
+| `POST` | `/v1/owner/evaluations` | `{dataset?, query_mode?, max_queries?, candidate_depth?, top_k?, label?}` → a small, server-bounded BM25 evaluation over an allowed bundled dataset. Requires `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true` and a constant-time-verified `X-Owner-Token`. |
 | `GET` | `/v1/experiments?dataset=&include_recorded=` | List live and recorded experiments. |
 | `GET` | `/v1/experiments/{id}` | Full experiment record with per-query outcomes and traces. |
 | `GET` | `/v1/experiments/{id}/queries/{query_id}` | One query's metrics, diagnostics and ranked trace. |
@@ -667,6 +699,17 @@ recorded artifact, `400 scaling_error` for an invalid benchmark/capacity request
 (e.g. a workload above the configured document cap), and `422 validation_error`
 for capacity assumptions outside their bounds. `POST /v1/scaling/capacity` is
 **not** gated by read-only mode: it computes arithmetic and mutates nothing.
+
+The owner endpoints are a separate authorization boundary and add
+`401 owner_unauthorized` (missing or wrong `X-Owner-Token`, or no token
+configured), `403 owner_evaluations_disabled` (the feature is off), and
+`422 owner_limit_exceeded` (a request above the configured query/depth/top-k cap
+or a dataset outside the allowlist). They work on an otherwise read-only
+deployment for an authenticated owner only; the public `/v1/evaluations`,
+`/v1/datasets/ingest` and ingestion endpoints remain `403` for anonymous callers.
+Every owner evaluation is BM25-only over a bounded trusted fixture; the
+authorization and bounds are enforced in FastAPI, independently of any frontend
+state.
 
 `POST /v1/answer` is deliberately layered: `candidate_depth` controls the
 first-stage retrieval pool, `max_evidence` controls how many passages reach the
@@ -756,6 +799,16 @@ real RRF implementation:
   grounded answer, unknown-citation flagging, `generation_error`, `503` when
   generation is disabled or unavailable, `403 read_only_mode`, empty-evidence
   abstention, and the recorded demos / quality / quality-reports endpoints.
+- **Laboratory Controls:** the three-state capability block on `/v1/config`
+  (each capability reports `available` / `permitted` with a reason, and never a
+  session toggle — so session state cannot be confused with a deployment
+  permission); the server-side owner policy (default clamping to the bounds, BM25
+  forcing, dataset allowlist, and rejection of over-limit queries / depth / top-k
+  and a second concurrent job); owner authorization (feature disabled → `403`,
+  missing or wrong `X-Owner-Token` → `401`, enabled-without-a-token → `401`); a
+  bounded owner evaluation running **real** BM25 over the bundled fixture on an
+  otherwise read-only deployment; and that no request — including refused
+  mutations — mutates the deployment's permissions or leaks the owner token.
 - **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
   profile for the sample contract and returns the expected top clause.
 - **Reranker (opt-in, `-m reranker`):** the real
