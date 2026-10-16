@@ -47,16 +47,28 @@ def abstained_validation(evidence: list[EvidenceItem]) -> CitationValidation:
 #: Matches an ``[S3]`` / ``S3`` identifier anywhere in free text.
 _CITATION_IN_TEXT = re.compile(r"\[?\b(S\d+)\b\]?", re.IGNORECASE)
 
+#: A citation string must be *exactly* one identifier, not merely contain one.
+_STRICT_ID = re.compile(r"[sS][0-9]{1,3}")
+
 _ANSWERED_STATES = ("answered", "partially_answered")
 
 
-def normalize_source_id(raw: str) -> str:
-    """Reduce ``"[s1]"``, ``" S1 "`` and ``"S1."`` to the canonical ``"S1"``."""
+def normalize_source_id(raw: str) -> str | None:
+    """Parse one citation string into a canonical ``"S1"`` id, or ``None``.
 
-    match = _CITATION_IN_TEXT.search(raw or "")
-    if match is not None:
-        return match.group(1).upper()
-    return (raw or "").strip().upper()
+    The **whole** string must be a single identifier, optionally wrapped in one
+    pair of brackets and/or trailed by a full stop — ``"[s1]"``, ``" S1 "`` and
+    ``"S1."`` all normalise to ``"S1"``. A string that merely *contains* an
+    identifier — ``"see S1"``, ``"S1 and S2"``, ``"file: saas-03.txt"`` — is not a
+    valid citation and returns ``None`` instead of being silently accepted.
+    """
+
+    text = (raw or "").strip().strip(".").strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1].strip().strip(".").strip()
+    if _STRICT_ID.fullmatch(text):
+        return text.upper()
+    return None
 
 
 def inline_source_ids(text: str) -> list[str]:
@@ -86,6 +98,9 @@ def verify_citations(
         "citation validity is a mechanical check that cited ids exist in the "
         "selected context; it is not proof that the evidence supports the claim",
         "semantic support requires separate evaluation or human review",
+        "whether the free-text answer asserts facts absent from the structured "
+        "claims (answer/claims consistency) is not deterministically decidable and "
+        "is not asserted here",
     ]
 
     if payload is None:
@@ -104,10 +119,24 @@ def verify_citations(
 
     issues: list[CitationIssue] = []
     cited: list[str] = []
+    malformed: list[str] = []
     seen: set[str] = set()
-    for claim in payload.claims:
+    for index, claim in enumerate(payload.claims):
         for raw in claim.citations:
             source_id = normalize_source_id(raw)
+            if source_id is None:
+                malformed.append(raw)
+                issues.append(
+                    CitationIssue(
+                        code="malformed_citation",
+                        claim_index=index,
+                        detail=(
+                            f"citation {raw!r} is not a well-formed passage id of the "
+                            "form 'S1'"
+                        ),
+                    )
+                )
+                continue
             if source_id not in seen:
                 seen.add(source_id)
                 cited.append(source_id)
@@ -155,7 +184,15 @@ def verify_citations(
                 )
             )
 
-    citation_valid = structural_valid and not unknown
+    has_citations = bool(cited) or bool(malformed)
+    all_citations_resolved = (
+        (not unknown and not malformed) if has_citations else None
+    )
+    all_claims_cited = (
+        not uncited_claim_indices if payload.claims else None
+    )
+
+    citation_valid = structural_valid and not unknown and not malformed
     if payload.status in _ANSWERED_STATES:
         citation_valid = citation_valid and bool(payload.claims) and bool(
             any(claim.citations for claim in payload.claims)
@@ -165,9 +202,13 @@ def verify_citations(
         structural_valid=structural_valid,
         citation_valid=citation_valid,
         semantic_support="not_determined",
+        all_citations_resolved=all_citations_resolved,
+        all_claims_cited=all_claims_cited,
+        answer_claims_consistency="not_determined",
         cited_source_ids=cited,
         known_source_ids=known,
         unknown_source_ids=unknown,
+        malformed_citations=malformed,
         uncited_claim_indices=uncited_claim_indices,
         issues=issues,
         notes=notes,

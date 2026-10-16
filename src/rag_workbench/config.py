@@ -262,6 +262,15 @@ class Settings(BaseSettings):
     ollama_timeout_s: float = Field(default=120.0, gt=0, le=3600)
     ollama_temperature: float = Field(default=0.1, ge=0.0, le=2.0)
     ollama_num_predict: int = Field(default=512, ge=1, le=8192)
+    # Optional sampling seed. Left unset by default; setting it makes repeated
+    # runs of the same request reproducible, which the quality experiments use.
+    ollama_seed: int | None = None
+    # Instruction-prompt variant for grounded answers: "v1" (default, the original
+    # wording) or "v2" (explicit status definitions + an abstention example).
+    # "v2" is kept selectable for reproducibility; the recorded audit found it did
+    # NOT improve abstention and regressed one unanswerable question, so "v1"
+    # remains the default. Wording only — the trust boundary and schema are fixed.
+    answer_prompt_variant: Literal["v1", "v2"] = "v1"
     # Only loopback inference is permitted by default; a remote Ollama endpoint
     # requires a deliberate opt-in (trust boundary, Phase 5 §8).
     ollama_allow_remote: bool = False

@@ -187,7 +187,28 @@ def test_recorded_answer_demos_endpoints(settings: Settings, tmp_path: Path) -> 
             "kind": "answer_quality",
             "report_id": "aq-test",
             "created_at": "2026-01-02T00:00:00Z",
-            "metrics": {"citation_validity_rate": 0.9, "semantic_support": "not_determined"},
+            "recommended": True,
+            "config": {"model_id": "qwen2.5:1.5b-instruct", "max_evidence": 4},
+            "metrics": {
+                "citation_validity_rate": 0.9,
+                "semantic_support": "not_determined",
+                "complete_reference_coverage_rate": 0.5,
+            },
+            "counts": {"questions": 2},
+        },
+    )
+    write_quality_report(
+        answers_dir,
+        {
+            "kind": "answer_quality",
+            "report_id": "aq-test-2",
+            "created_at": "2026-01-03T00:00:00Z",
+            "config": {"model_id": "qwen2.5:1.5b-instruct", "max_evidence": 6},
+            "metrics": {
+                "citation_validity_rate": 1.0,
+                "semantic_support": "not_determined",
+                "complete_reference_coverage_rate": 0.75,
+            },
             "counts": {"questions": 2},
         },
     )
@@ -209,7 +230,18 @@ def test_recorded_answer_demos_endpoints(settings: Settings, tmp_path: Path) -> 
 
         quality = client.get("/v1/answer-quality")
         assert quality.status_code == 200
+        # An explicitly recommended report wins even when a newer one exists.
         assert quality.json()["report_id"] == "aq-test"
+
+        reports = client.get("/v1/answer-quality-reports")
+        assert reports.status_code == 200
+        report_body = reports.json()
+        assert report_body["total"] == 2
+        assert [r["report_id"] for r in report_body["reports"]] == ["aq-test-2", "aq-test"]
+        assert report_body["reports"][0]["max_evidence"] == 6
+        assert report_body["reports"][0]["recommended"] is False
+        assert report_body["reports"][1]["recommended"] is True
+        assert report_body["reports"][1]["complete_reference_coverage_rate"] == 0.5
 
 
 def test_config_reports_generation_capabilities(settings: Settings, tmp_path: Path) -> None:

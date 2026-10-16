@@ -299,6 +299,7 @@ def _build_parser() -> argparse.ArgumentParser:
     answer_ask.add_argument("--context-tokens", type=int, default=None)
     answer_ask.add_argument("--temperature", type=float, default=None)
     answer_ask.add_argument("--num-predict", type=int, default=None)
+    answer_ask.add_argument("--seed", type=int, default=None)
     answer_ask.add_argument("--json", action="store_true")
 
     answer_demos = answer_sub.add_parser("demos", help="list recorded answer demonstrations")
@@ -323,7 +324,13 @@ def _build_parser() -> argparse.ArgumentParser:
     answer_quality.add_argument("--rerank-candidates", type=int, default=None)
     answer_quality.add_argument("--max-evidence", type=int, default=None)
     answer_quality.add_argument("--context-tokens", type=int, default=None)
+    answer_quality.add_argument("--seed", type=int, default=None)
     answer_quality.add_argument("--label", default=None)
+    answer_quality.add_argument(
+        "--recommended",
+        action="store_true",
+        help="mark this report as the recommended configuration for the demo",
+    )
     answer_quality.add_argument("--out", type=Path, default=None)
 
     answer_record = answer_sub.add_parser(
@@ -342,7 +349,13 @@ def _build_parser() -> argparse.ArgumentParser:
     answer_record.add_argument("--rerank-candidates", type=int, default=None)
     answer_record.add_argument("--max-evidence", type=int, default=None)
     answer_record.add_argument("--context-tokens", type=int, default=None)
+    answer_record.add_argument("--seed", type=int, default=None)
     answer_record.add_argument("--label", default=None)
+    answer_record.add_argument(
+        "--recommended",
+        action="store_true",
+        help="mark this report as the recommended configuration for the demo",
+    )
     answer_record.add_argument("--directory", type=Path, default=None)
     answer_record.add_argument(
         "--no-demos", action="store_true", help="write only the aggregate quality report"
@@ -826,6 +839,13 @@ def _format_answer(response: AnswerResponse) -> str:
         f"unknown={validation.unknown_source_ids} "
         f"semantic={validation.semantic_support}"
     )
+    lines.append(
+        f"cit-full: all_citations_resolved={validation.all_citations_resolved} "
+        f"all_claims_cited={validation.all_claims_cited} "
+        f"answer_claims_consistency={validation.answer_claims_consistency}"
+    )
+    if validation.malformed_citations:
+        lines.append(f"malformed: {validation.malformed_citations}")
     context = response.context
     lines.append(
         f"context : retrieved={context.retrieved} selected={context.selected} "
@@ -856,6 +876,22 @@ def _format_quality_report(report: dict) -> str:
     ]
     for name in sorted(report["metrics"]):
         lines.append(f"  {name:<34}: {report['metrics'][name]}")
+    loss = report.get("evidence_loss")
+    if loss:
+        lines.append(
+            "evidence: "
+            f"included={loss['included']} "
+            f"retrieved_but_excluded={loss['retrieved_but_excluded']} "
+            f"never_retrieved={loss['never_retrieved']} "
+            f"(of {loss['questions_with_reference']} with reference)"
+        )
+        for case in loss["cases"]:
+            if case["classification"] != "included":
+                missing = case["missing_selected"] or case["missing_retrieved"]
+                lines.append(
+                    f"    {case['id']}: {case['classification']} "
+                    f"missing={missing}"
+                )
     lines.append(
         f"latency: retrieval={report['latency']['retrieval_ms']['p50']}ms "
         f"generation={report['latency']['generation_ms']['p50']}ms "
@@ -948,6 +984,7 @@ def _cmd_answer(settings: Settings, database: Database, args: argparse.Namespace
             context_tokens=args.context_tokens,
             temperature=args.temperature,
             num_predict=args.num_predict,
+            seed=args.seed,
         )
         if args.json:
             print(response.model_dump_json(indent=2))
@@ -971,7 +1008,9 @@ def _cmd_answer(settings: Settings, database: Database, args: argparse.Namespace
             rerank_candidates=args.rerank_candidates,
             max_evidence=args.max_evidence,
             context_tokens=args.context_tokens,
+            seed=args.seed,
             label=args.label,
+            recommended=args.recommended,
         )
         if command == "quality":
             if args.out is not None:

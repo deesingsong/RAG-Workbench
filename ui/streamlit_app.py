@@ -868,23 +868,58 @@ def _render_answer_record(record: dict) -> None:
     claims = record.get("claims") or []
     if claims:
         st.markdown("**Claims and cited passages**")
+        st.caption(
+            "Each claim is shown with the verbatim passage(s) it cites, so a claim "
+            "whose citation does not actually support it can be seen here. Whether a "
+            "citation supports the claim is *not* decided automatically (semantic "
+            "support is not determined)."
+        )
+        evidence_by_id = {
+            str(item.get("source_id")): item for item in (record.get("evidence") or [])
+        }
         for index, claim in enumerate(claims, 1):
-            cites = " ".join(f"`{c}`" for c in claim.get("citations", []))
-            st.markdown(f"{index}. {claim.get('text', '')}  {cites or '_(no citation)_'}")
+            st.markdown(f"**{index}. {claim.get('text', '')}**")
+            cites = claim.get("citations") or []
+            if not cites:
+                st.caption("_(no citation)_")
+                continue
+            for raw in cites:
+                key = str(raw).strip().upper()
+                item = evidence_by_id.get(key) or evidence_by_id.get(str(raw))
+                if item is None:
+                    st.caption(f"`{raw}` — not one of the selected passages")
+                    continue
+                where = item.get("source_name") or ""
+                if item.get("section_number"):
+                    where += f" #{item['section_number']}"
+                elif item.get("section_path"):
+                    where += f" {item['section_path']}"
+                excerpt = " ".join((item.get("text") or "").split())[:240]
+                st.caption(f"`{raw}` → {where}: {excerpt}")
     if record.get("unanswered"):
         st.markdown("**Unanswered**")
         for item in record["unanswered"]:
             st.caption(f"• {item}")
 
     validation = record.get("citation_validation") or {}
-    st.markdown("**Citation validation** (three distinct properties)")
+    st.markdown("**Citation validation** (mechanical checks vs. human review)")
     st.caption(
         f"structural_valid {validation.get('structural_valid')} • "
         f"citation_valid {validation.get('citation_valid')} • "
-        f"semantic_support {validation.get('semantic_support', 'not_determined')}"
+        f"all_citations_resolved {validation.get('all_citations_resolved')} • "
+        f"all_claims_cited {validation.get('all_claims_cited')}"
+    )
+    st.caption(
+        f"semantic_support {validation.get('semantic_support', 'not_determined')} • "
+        f"answer_claims_consistency "
+        f"{validation.get('answer_claims_consistency', 'not_determined')} "
+        "(not asserted: a citation resolving to a real passage does NOT prove it "
+        "supports the claim, nor that the answer text matches the structured claims)"
     )
     if validation.get("unknown_source_ids"):
         st.caption(f"unknown citations: {validation['unknown_source_ids']}")
+    if validation.get("malformed_citations"):
+        st.caption(f"malformed citations: {validation['malformed_citations']}")
     if validation.get("uncited_claim_indices"):
         st.caption(f"uncited claim indices: {validation['uncited_claim_indices']}")
     for note in validation.get("notes", []):
@@ -973,9 +1008,16 @@ def _render_answer_quality() -> None:
         ("structural_validity_rate", "structural validity"),
         ("citation_validity_rate", "citation validity"),
         ("invalid_citation_rate", "invalid citation rate"),
+        ("malformed_citation_rate", "malformed citation rate"),
+        ("status_accuracy_rate", "answer-state accuracy"),
         ("correct_abstention_rate", "correct abstention (unanswerable)"),
         ("over_abstention_rate", "over-abstention (answerable)"),
-        ("reference_evidence_selected_rate", "reference evidence selected"),
+        ("complete_reference_coverage_rate", "reference coverage: complete"),
+        ("partial_reference_coverage_rate", "reference coverage: partial"),
+        ("reference_evidence_unit_coverage_rate", "reference coverage: per-anchor"),
+        ("reference_evidence_selected_rate", "reference evidence selected (any, legacy)"),
+        ("reference_evidence_retrieved_but_excluded_rate", "evidence retrieved but excluded"),
+        ("reference_evidence_never_retrieved_rate", "evidence never retrieved"),
         ("context_exclusion_rate", "context exclusions"),
         ("generation_failure_rate", "generation failures"),
     ]
@@ -988,8 +1030,71 @@ def _render_answer_quality() -> None:
         "passage truly supports a claim is not deterministically decidable and is "
         "not scored."
     )
+
+    loss = report.get("evidence_loss")
+    if loss:
+        st.markdown("**Evidence loss** (reference-evidence coverage per question)")
+        st.caption(
+            f"included {loss.get('included')} • "
+            f"retrieved but excluded {loss.get('retrieved_but_excluded')} • "
+            f"never retrieved {loss.get('never_retrieved')} "
+            f"(of {loss.get('questions_with_reference')} questions with reference evidence)"
+        )
+        st.dataframe(
+            [
+                {
+                    "id": case.get("id"),
+                    "classification": case.get("classification"),
+                    "required": case.get("required"),
+                    "retrieved": case.get("retrieved"),
+                    "selected": case.get("selected"),
+                    "missing (not selected)": ", ".join(case.get("missing_selected") or []),
+                    "missing (not retrieved)": ", ".join(case.get("missing_retrieved") or []),
+                }
+                for case in loss.get("cases", [])
+            ],
+            hide_index=True,
+        )
+
+    _render_quality_report_comparison()
     for item in report.get("limitations", []):
         st.caption(f"• {item}")
+
+
+def _render_quality_report_comparison() -> None:
+    """List every recorded quality report so configuration trade-offs are visible."""
+
+    status, body = api_get("/v1/answer-quality-reports")
+    reports = body.get("reports") if status == 200 and isinstance(body, dict) else None
+    if not reports or len(reports) < 2:
+        return
+    st.markdown("**Recorded configurations** (newest first)")
+    st.caption(
+        "Each row is a separate recorded experiment. Original Phase 5 runs are kept; "
+        "later rows are additional configurations. Compare coverage, abstention and "
+        "latency rather than assuming more evidence is always better."
+    )
+    st.dataframe(
+        [
+            {
+                "report_id": row.get("report_id"),
+                "config": row.get("label"),
+                "recommended": "✔" if row.get("recommended") else "",
+                "prompt": row.get("prompt_variant"),
+                "max_evidence": row.get("max_evidence"),
+                "seed": row.get("seed"),
+                "struct": row.get("structural_validity_rate"),
+                "cite": row.get("citation_validity_rate"),
+                "ref_complete": row.get("complete_reference_coverage_rate"),
+                "ref_units": row.get("reference_evidence_unit_coverage_rate"),
+                "correct_abstain": row.get("correct_abstention_rate"),
+                "state_acc": row.get("status_accuracy_rate"),
+                "gen_ms_p50": row.get("generation_ms_p50"),
+            }
+            for row in reports
+        ],
+        hide_index=True,
+    )
 
 
 def render_answer_lab() -> None:

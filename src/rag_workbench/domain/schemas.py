@@ -396,22 +396,38 @@ class CitationIssue(BaseModel):
 
 
 class CitationValidation(BaseModel):
-    """Deterministic citation checks. Three properties are kept strictly apart:
+    """Deterministic citation checks. Several properties are kept strictly apart.
+
+    Mechanical properties (verifiable without human judgement):
 
     * ``structural_valid``  — the output conformed to the answer schema;
-    * ``citation_valid``    — every cited id maps to a real selected passage, and
-      every evidence-supported answer has at least one citation;
-    * ``semantic_support``  — whether the cited passage *actually supports* the
-      claim. This is **not** deterministically verifiable and is always reported
-      as ``not_determined`` here; it requires separate evaluation or human review.
+    * ``all_citations_resolved`` — every citation string the model returned is a
+      well-formed identifier that maps to a selected passage (no malformed string,
+      no unknown id). ``None`` when the model returned no citations at all;
+    * ``all_claims_cited`` — every structured claim carries at least one citation.
+      ``None`` when there are no structured claims;
+    * ``citation_valid``    — the combined mechanical verdict used by callers: the
+      two properties above hold, and an answer the model marked as evidence-backed
+      actually carries claims and citations.
+
+    Not mechanically verifiable (always reported ``not_determined``):
+
+    * ``answer_claims_consistency`` — whether the free-text answer asserts facts
+      that the structured ``claims`` do not represent. Establishing this needs
+      human review or a separate evaluator, so it is never asserted here;
+    * ``semantic_support``  — whether a cited passage *actually supports* a claim.
     """
 
     structural_valid: bool
     citation_valid: bool
     semantic_support: str = "not_determined"
+    all_citations_resolved: bool | None = None
+    all_claims_cited: bool | None = None
+    answer_claims_consistency: str = "not_determined"
     cited_source_ids: list[str] = Field(default_factory=list)
     known_source_ids: list[str] = Field(default_factory=list)
     unknown_source_ids: list[str] = Field(default_factory=list)
+    malformed_citations: list[str] = Field(default_factory=list)
     uncited_claim_indices: list[int] = Field(default_factory=list)
     issues: list[CitationIssue] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)

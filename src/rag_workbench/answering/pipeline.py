@@ -35,6 +35,7 @@ from rag_workbench.domain.interfaces import AnswerGenerator
 from rag_workbench.domain.schemas import (
     AnswerResponse,
     ContextDiagnostics,
+    ExcludedEvidence,
     GenerationConfig,
     GenerationRequest,
     SearchHit,
@@ -46,6 +47,26 @@ GeneratorFactory = Callable[[], AnswerGenerator]
 
 _ANSWERED_STATES = ("answered", "partially_answered")
 _GENERATION_ERROR_REASON = "the local model could not produce a valid structured answer"
+
+
+def _dropped_suffix(
+    excluded: list[ExcludedEvidence], reason: str, *, limit: int = 6
+) -> str:
+    """Name the passages dropped for one reason, so the loss is inspectable.
+
+    The excluded list already records every dropped candidate; naming the few
+    highest-ranked ones inline makes an ``evidence_excluded_by_max`` diagnostic
+    actionable instead of a bare count.
+    """
+
+    dropped = [item for item in excluded if item.reason == reason]
+    if not dropped:
+        return ""
+    labels = ", ".join(
+        f"{item.source_name} (rank {item.rank})" for item in dropped[:limit]
+    )
+    more = " …" if len(dropped) > limit else ""
+    return f": {labels}{more}"
 
 
 class AnswerService:
@@ -85,6 +106,7 @@ class AnswerService:
         context_tokens: int | None = None,
         temperature: float | None = None,
         num_predict: int | None = None,
+        seed: int | None = None,
     ) -> AnswerResponse:
         settings = self._settings
         resolved_max_evidence = max_evidence or settings.answer_max_evidence
@@ -111,7 +133,7 @@ class AnswerService:
 
         # Reserve room for the trusted instructions, the question, the response
         # schema and the expected completion before admitting passages.
-        instructions = build_instructions()
+        instructions = build_instructions(settings.answer_prompt_variant)
         reserve = (
             estimate_tokens(instructions)
             + estimate_tokens(question)
@@ -134,6 +156,7 @@ class AnswerService:
             temperature=settings.ollama_temperature if temperature is None else temperature,
             num_predict=settings.ollama_num_predict if num_predict is None else num_predict,
             timeout_s=settings.ollama_timeout_s,
+            seed=settings.ollama_seed if seed is None else seed,
         )
 
         if not retrieval.hits or not assembly.evidence:
@@ -191,6 +214,7 @@ class AnswerService:
 
         diagnostics = self._diagnose(
             retrieval_hits=retrieval.hits,
+            excluded=assembly.excluded,
             context=context,
             validation=validation,
             status=status,
@@ -206,6 +230,7 @@ class AnswerService:
             "temperature": generation_config.temperature,
             "num_predict": generation_config.num_predict,
             "timeout_s": generation_config.timeout_s,
+            "prompt_variant": settings.answer_prompt_variant,
             "token_count_method": "model-and-estimate",
         }
 
@@ -279,6 +304,7 @@ class AnswerService:
         validation = abstained_validation(evidence)
         diagnostics = self._diagnose(
             retrieval_hits=retrieval_hits,
+            excluded=excluded,
             context=context,
             validation=None,
             status="insufficient_evidence",
@@ -317,6 +343,7 @@ class AnswerService:
         self,
         *,
         retrieval_hits: list[SearchHit],
+        excluded: list[ExcludedEvidence],
         context: ContextDiagnostics,
         validation,
         status: str,
@@ -345,6 +372,7 @@ class AnswerService:
                     "detail": (
                         f"{context.excluded_by_max} passage(s) were retrieved but dropped "
                         "because the evidence limit was reached"
+                        + _dropped_suffix(excluded, "max_evidence")
                     ),
                 }
             )
@@ -355,6 +383,7 @@ class AnswerService:
                     "detail": (
                         f"{context.excluded_by_budget} passage(s) were retrieved but "
                         "excluded by the context token budget"
+                        + _dropped_suffix(excluded, "context_budget")
                     ),
                 }
             )

@@ -113,3 +113,44 @@ def test_abstained_validation_is_not_a_failure() -> None:
     assert validation.structural_valid is True
     assert validation.citation_valid is True
     assert validation.notes
+
+
+def test_strict_ids_accept_only_a_whole_identifier() -> None:
+    assert normalize_source_id("[s1]") == "S1"
+    assert normalize_source_id(" S1 ") == "S1"
+    assert normalize_source_id("S1.") == "S1"
+    assert normalize_source_id("[S1].") == "S1"
+    # A valid-looking id embedded as a substring must NOT be accepted.
+    assert normalize_source_id("see S1") is None
+    assert normalize_source_id("S1 and S2") is None
+    assert normalize_source_id("file: saas-03.txt") is None
+    assert normalize_source_id("MS1") is None
+
+
+def test_malformed_citation_string_does_not_resolve_a_substring_id() -> None:
+    payload = AnswerPayload(
+        status="answered",
+        answer="An answer with no inline id.",
+        claims=[Claim(text="A claim.", citations=["see S1"])],
+    )
+    validation = verify_citations(payload, evidence=_evidence())
+    assert validation.citation_valid is False
+    assert validation.all_citations_resolved is False
+    assert validation.malformed_citations == ["see S1"]
+    # The embedded S1 was not accepted as a resolved citation.
+    assert "S1" not in validation.cited_source_ids
+    assert any(issue.code == "malformed_citation" for issue in validation.issues)
+
+
+def test_citation_sub_properties_separate_mechanical_from_review() -> None:
+    payload = AnswerPayload(
+        status="answered",
+        answer="Grounded [S1].",
+        claims=[Claim(text="A claim.", citations=["S1"])],
+    )
+    validation = verify_citations(payload, evidence=_evidence())
+    assert validation.all_citations_resolved is True
+    assert validation.all_claims_cited is True
+    # Neither semantic support nor answer/claims consistency is asserted.
+    assert validation.answer_claims_consistency == "not_determined"
+    assert validation.semantic_support == "not_determined"

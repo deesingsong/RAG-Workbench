@@ -121,11 +121,11 @@ def write_quality_report(directory: Path, record: dict) -> Path:
     return path
 
 
-def load_quality_report(directory: Path) -> dict | None:
-    """Return the newest ``answer_quality`` report, or ``None``."""
+def load_quality_reports(directory: Path) -> list[dict]:
+    """Load every ``answer_quality`` report, newest first."""
 
     if not directory.is_dir():
-        return None
+        return []
     reports: list[dict] = []
     for path in sorted(directory.glob("*.json")):
         try:
@@ -137,7 +137,58 @@ def load_quality_report(directory: Path) -> dict | None:
             payload["artifact_path"] = path.name
             reports.append(payload)
     reports.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
-    return reports[0] if reports else None
+    return reports
+
+
+def load_quality_report(directory: Path) -> dict | None:
+    """Return the report the deployment should headline.
+
+    A report explicitly marked ``recommended`` wins (so the public demo shows the
+    chosen configuration even after later comparison runs are recorded); otherwise
+    the newest report is returned.
+    """
+
+    reports = load_quality_reports(directory)
+    if not reports:
+        return None
+    for report in reports:
+        if report.get("recommended"):
+            return report
+    return reports[0]
+
+
+def quality_report_summary(report: dict) -> dict:
+    """A compact summary of one quality report for list/comparison views."""
+
+    metrics = report.get("metrics", {}) or {}
+    config = report.get("config", {}) or {}
+    return {
+        "report_id": report.get("report_id"),
+        "created_at": report.get("created_at"),
+        "source": report.get("source", RECORDED_SOURCE),
+        "label": report.get("label"),
+        "recommended": bool(report.get("recommended")),
+        "dataset": (report.get("dataset", {}) or {}).get("name"),
+        "model_id": config.get("model_id"),
+        "mode": config.get("mode"),
+        "query_mode": config.get("query_mode"),
+        "max_evidence": config.get("max_evidence"),
+        "context_tokens": config.get("context_tokens"),
+        "seed": config.get("seed"),
+        "prompt_variant": config.get("prompt_variant"),
+        "counts": report.get("counts"),
+        "structural_validity_rate": metrics.get("structural_validity_rate"),
+        "citation_validity_rate": metrics.get("citation_validity_rate"),
+        "complete_reference_coverage_rate": metrics.get("complete_reference_coverage_rate"),
+        "reference_evidence_unit_coverage_rate": metrics.get(
+            "reference_evidence_unit_coverage_rate"
+        ),
+        "correct_abstention_rate": metrics.get("correct_abstention_rate"),
+        "status_accuracy_rate": metrics.get("status_accuracy_rate"),
+        "generation_ms_p50": (report.get("latency", {}) or {})
+        .get("generation_ms", {})
+        .get("p50"),
+    }
 
 
 __all__ = [
@@ -147,7 +198,9 @@ __all__ = [
     "find_answer_demo",
     "load_answer_demos",
     "load_quality_report",
+    "load_quality_reports",
     "new_demo_id",
+    "quality_report_summary",
     "slugify",
     "write_answer_demo",
     "write_quality_report",

@@ -16,12 +16,16 @@ from rag_workbench.answering.recorded import (
     find_answer_demo,
     load_answer_demos,
     load_quality_report,
+    load_quality_reports,
+    quality_report_summary,
 )
 from rag_workbench.api.deps import get_answer_service, get_settings, require_generation
 from rag_workbench.api.schemas import (
     AnswerDemoListResponse,
     AnswerDemoResponse,
     AnswerDemoSummary,
+    AnswerQualityReportListResponse,
+    AnswerQualityReportSummary,
     AnswerRequest,
 )
 from rag_workbench.config import Settings
@@ -52,6 +56,7 @@ def answer(
         context_tokens=request.context_tokens,
         temperature=request.temperature,
         num_predict=request.num_predict,
+        seed=request.seed,
     )
 
 
@@ -82,3 +87,20 @@ def answer_quality(settings: Settings = Depends(get_settings)) -> dict:
     if report is None:
         raise AnswerNotFoundError("no recorded answer-quality report is available")
     return report
+
+
+@router.get(
+    "/answer-quality-reports",
+    response_model=AnswerQualityReportListResponse,
+    tags=["answer"],
+)
+def list_answer_quality_reports(
+    settings: Settings = Depends(get_settings),
+) -> AnswerQualityReportListResponse:
+    """List every recorded quality report, newest first, for configuration comparison."""
+
+    reports = [
+        AnswerQualityReportSummary.model_validate(quality_report_summary(report))
+        for report in load_quality_reports(settings.recorded_answers_dir)
+    ]
+    return AnswerQualityReportListResponse(total=len(reports), reports=reports)

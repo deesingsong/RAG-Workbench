@@ -158,3 +158,78 @@ def test_committed_answer_quality_dataset_parses() -> None:
     assert len(dataset.questions) >= 8
     assert any(q.expected_status == "insufficient_evidence" for q in dataset.questions)
     assert any(q.expected_status == "partially_answered" for q in dataset.questions)
+
+
+def _case(
+    cid: str,
+    *,
+    required: int = 0,
+    selected: int = 0,
+    retrieved: int = 0,
+    expected: str = "answered",
+    status: str = "answered",
+) -> dict:
+    """Build a minimal quality-case dict the aggregation understands."""
+
+    if required == 0:
+        classification = None
+    elif retrieved < required:
+        classification = "never_retrieved"
+    elif selected < required:
+        classification = "retrieved_but_excluded"
+    else:
+        classification = "included"
+    return {
+        "id": cid,
+        "answerable": expected in ("answered", "partially_answered"),
+        "expected_status": expected,
+        "status": status,
+        "status_correct": status == expected,
+        "abstained": status == "insufficient_evidence",
+        "structural_valid": True,
+        "citation_valid": True,
+        "unknown_citation_ids": [],
+        "malformed_citations": [],
+        "all_citations_resolved": True,
+        "all_claims_cited": True,
+        "reference_evidence_present": (selected > 0) if required else None,
+        "reference_evidence": {
+            "required": required,
+            "selected": selected,
+            "retrieved": retrieved,
+            "complete_selected": (selected == required) if required else None,
+            "partial_selected": (0 < selected < required) if required else None,
+        },
+        "reference_evidence_coverage": classification,
+        "reference_evidence_missing_retrieved": [],
+        "reference_evidence_missing_selected": [],
+        "excluded": 0,
+    }
+
+
+def test_aggregate_distinguishes_partial_from_complete_coverage() -> None:
+    cases = [
+        _case("partial", required=2, selected=1, retrieved=2),
+        _case("complete", required=2, selected=2, retrieved=2),
+        _case("never", required=1, selected=0, retrieved=0),
+        _case("none"),
+    ]
+    metrics = AnswerQualityRunner._aggregate(cases)
+    # 1 of 3 anchored questions is complete and 1 of 3 is partial; they are distinct.
+    assert metrics["complete_reference_coverage_rate"] == 0.3333
+    assert metrics["partial_reference_coverage_rate"] == 0.3333
+    # 3 selected anchors of 5 required.
+    assert metrics["reference_evidence_units_required"] == 5
+    assert metrics["reference_evidence_unit_coverage_rate"] == 0.6
+    assert metrics["reference_evidence_included_rate"] == 0.3333
+    assert metrics["reference_evidence_retrieved_but_excluded_rate"] == 0.3333
+    assert metrics["reference_evidence_never_retrieved_rate"] == 0.3333
+    # The legacy any() rate would call the partial case "covered"; here it is only
+    # reported as a separate, clearly-labelled legacy metric.
+    assert metrics["reference_evidence_selected_rate"] == 0.6667
+
+    loss = AnswerQualityRunner._evidence_loss(cases)
+    assert loss["questions_with_reference"] == 3
+    assert loss["included"] == 1
+    assert loss["retrieved_but_excluded"] == 1
+    assert loss["never_retrieved"] == 1

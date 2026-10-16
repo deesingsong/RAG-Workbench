@@ -66,6 +66,7 @@ class AnswerRequest(BaseModel):
     context_tokens: int | None = Field(default=None, ge=128, le=32768)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     num_predict: int | None = Field(default=None, ge=1, le=8192)
+    seed: int | None = None
 
 
 class AnswerDemoSummary(BaseModel):
@@ -98,6 +99,37 @@ class AnswerDemoResponse(BaseModel):
     """An ``answer_demo`` artifact's raw record (already validated on load)."""
 
     demo: dict
+
+
+class AnswerQualityReportSummary(BaseModel):
+    """A compact summary of one recorded answer-quality report, for comparison."""
+
+    report_id: str | None = None
+    created_at: str | None = None
+    source: str = "recorded"
+    label: str | None = None
+    recommended: bool = False
+    dataset: str | None = None
+    model_id: str | None = None
+    mode: str | None = None
+    query_mode: str | None = None
+    max_evidence: int | None = None
+    context_tokens: int | None = None
+    seed: int | None = None
+    prompt_variant: str | None = None
+    counts: dict | None = None
+    structural_validity_rate: float | None = None
+    citation_validity_rate: float | None = None
+    complete_reference_coverage_rate: float | None = None
+    reference_evidence_unit_coverage_rate: float | None = None
+    correct_abstention_rate: float | None = None
+    status_accuracy_rate: float | None = None
+    generation_ms_p50: float | None = None
+
+
+class AnswerQualityReportListResponse(BaseModel):
+    total: int
+    reports: list[AnswerQualityReportSummary]
 
 
 class VectorRebuildRequest(BaseModel):

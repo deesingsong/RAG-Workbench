@@ -1,0 +1,900 @@
+{
+  "cases": [
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The Mutual Non-Disclosure Agreement remains in effect for three years from the Effective Date, and the confidentiality obligations survive termination for a further two years.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "This Agreement remains in effect for three years from the Effective Date, and the confidentiality obligations survive termination for a further two years."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "18 passage(s) were retrieved but dropped because the evidence limit was reached: reseller-05.txt (rank 7), license-07.txt (rank 8), license-07.txt (rank 9), nda-01.txt (rank 10), saas-03.txt (rank 11), sow-06.txt (rank 12) \u2026"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "5 selected passage(s) were not cited: S2, S3, S4, S5, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-001",
+      "malformed_citations": [],
+      "question": "How long does the Mutual Non-Disclosure Agreement remain in effect, and how long do the confidentiality obligations survive termination?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.052,
+        "context_assembly": 0.315,
+        "generation": 5810.093,
+        "retrieval": 632.017,
+        "total": 6827.207
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "Within thirty days, the Customer must pay an undisputed invoice. Overdue amounts accrue interest at one percent per month or the maximum rate permitted by law, whichever is lower.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Supplier shall submit invoices monthly in arrears, and the Customer shall pay each undisputed invoice within thirty days of receipt."
+        },
+        {
+          "citations": [
+            "S5"
+          ],
+          "text": "Overdue amounts accrue interest at one percent per month or the maximum rate permitted by law, whichever is lower."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "17 passage(s) were retrieved but dropped because the evidence limit was reached: sow-06.txt (rank 8), sow-06.txt (rank 9), msa-02.txt (rank 10), license-07.txt (rank 11), saas-03.txt (rank 12), reseller-05.txt (rank 13) \u2026"
+        },
+        {
+          "code": "overlapping_evidence",
+          "detail": "1 overlapping passage(s) removed"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "4 selected passage(s) were not cited: S2, S3, S4, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-002",
+      "malformed_citations": [],
+      "question": "Within how many days must the Customer pay an undisputed invoice under the Master Services Agreement, and what interest applies to overdue amounts?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.052,
+        "context_assembly": 0.234,
+        "generation": 1948.38,
+        "retrieval": 600.598,
+        "total": 2808.535
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "99.9 percent",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Provider shall make the hosted service available at least 99.9 percent of the time in each calendar month, excluding scheduled maintenance windows notified in advance."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_budget",
+          "detail": "20 passage(s) were retrieved but excluded by the context token budget: dpa-04.txt (rank 5), license-07.txt (rank 6), sow-06.txt (rank 7), msa-02.txt (rank 8), reseller-05.txt (rank 9), license-07.txt (rank 10) \u2026"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "3 selected passage(s) were not cited: S2, S3, S4"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 20,
+      "expected_status": "answered",
+      "id": "aq-003",
+      "malformed_citations": [],
+      "question": "What availability percentage does the SaaS subscription provider commit to under the service levels?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 4,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.035,
+        "context_assembly": 0.362,
+        "generation": 1732.7,
+        "retrieval": 29.875,
+        "total": 2028.135
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The Processor shall not transfer Personal Data outside the European Economic Area unless the transfer is covered by an adequacy decision or appropriate safeguards.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Processor shall not transfer Personal Data outside the European Economic Area unless the transfer is covered by an adequacy decision or appropriate safeguards."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "18 passage(s) were retrieved but dropped because the evidence limit was reached: dpa-04.txt (rank 7), dpa-04.txt (rank 8), dpa-04.txt (rank 9), saas-03.txt (rank 10), license-07.txt (rank 11), sow-06.txt (rank 12) \u2026"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "5 selected passage(s) were not cited: S2, S3, S4, S5, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-004",
+      "malformed_citations": [],
+      "question": "Under what conditions may Personal Data be transferred outside the European Economic Area under the Data Processing Addendum?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.036,
+        "context_assembly": 0.216,
+        "generation": 1843.519,
+        "retrieval": 32.7,
+        "total": 2152.214
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The Company grants the Reseller a non-exclusive, revocable licence to use the Company's trademarks solely to market the Products during the term.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Company grants the Reseller a non-exclusive, revocable licence to use the Company's trademarks solely to market the Products during the term."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "16 passage(s) were retrieved but dropped because the evidence limit was reached: msa-02.txt (rank 8), dpa-04.txt (rank 9), license-07.txt (rank 10), license-07.txt (rank 12), nda-01.txt (rank 13), reseller-05.txt (rank 14) \u2026"
+        },
+        {
+          "code": "evidence_excluded_by_budget",
+          "detail": "1 passage(s) were retrieved but excluded by the context token budget: saas-03.txt (rank 2)"
+        },
+        {
+          "code": "overlapping_evidence",
+          "detail": "1 overlapping passage(s) removed"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "5 selected passage(s) were not cited: S2, S3, S4, S5, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-005",
+      "malformed_citations": [],
+      "question": "What trademark rights does the Company grant the Reseller under the Reseller Agreement?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.037,
+        "context_assembly": 0.3,
+        "generation": 2016.291,
+        "retrieval": 28.896,
+        "total": 2294.68
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The Customer must pay a fixed fee of one hundred thousand dollars for the Statement of Work deliverables.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Customer shall pay the Supplier a fixed fee of one hundred thousand dollars for the Deliverables."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "15 passage(s) were retrieved but dropped because the evidence limit was reached: license-07.txt (rank 10), sow-06.txt (rank 11), sow-06.txt (rank 12), sow-06.txt (rank 13), sow-06.txt (rank 14), msa-02.txt (rank 15) \u2026"
+        },
+        {
+          "code": "overlapping_evidence",
+          "detail": "3 overlapping passage(s) removed"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "5 selected passage(s) were not cited: S2, S3, S4, S5, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-006",
+      "malformed_citations": [],
+      "question": "What is the fixed fee the Customer must pay for the Statement of Work deliverables?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.039,
+        "context_assembly": 0.264,
+        "generation": 1701.021,
+        "retrieval": 39.391,
+        "total": 2002.247
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The Mutual Non-Disclosure Agreement is governed by the laws of the State of California.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "This Agreement is governed by the laws of the State of California."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_budget",
+          "detail": "19 passage(s) were retrieved but excluded by the context token budget: reseller-05.txt (rank 4), msa-02.txt (rank 6), nda-01.txt (rank 8), dpa-04.txt (rank 9), msa-02.txt (rank 10), dpa-04.txt (rank 11) \u2026"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "4 selected passage(s) were not cited: S2, S3, S4, S5"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 19,
+      "expected_status": "partially_answered",
+      "id": "aq-007",
+      "malformed_citations": [],
+      "question": "What law governs the Mutual Non-Disclosure Agreement, and what recovery-time objective does the SaaS provider commit to after a disaster?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 5,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": false,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.035,
+        "context_assembly": 0.334,
+        "generation": 1564.662,
+        "retrieval": 37.833,
+        "total": 1884.847
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": true,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The penalty for late delivery of Services under the Master Services Agreement is not explicitly stated in the provided passages.",
+      "answerable": false,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "The Supplier shall provide the consulting services described in this Statement of Work under and subject to the terms of the Master Services Agreement."
+        },
+        {
+          "citations": [
+            "S2"
+          ],
+          "text": "The Supplier shall indemnify the Customer against third-party claims that the Services infringe a patent, copyright or trade secret, provided the Customer promptly notifies the Supplier."
+        },
+        {
+          "citations": [
+            "S3"
+          ],
+          "text": "The Supplier shall perform the Services with reasonable skill and care and in accordance with the applicable statement of work."
+        },
+        {
+          "citations": [
+            "S4"
+          ],
+          "text": "The Customer may terminate this Agreement for convenience on ninety days' written notice, subject to payment for Services performed before the effective date of termination."
+        },
+        {
+          "citations": [
+            "S5"
+          ],
+          "text": "The Supplier's delivery obligations are subject to the Customer's performance of its dependencies."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "17 passage(s) were retrieved but dropped because the evidence limit was reached: license-07.txt (rank 8), msa-02.txt (rank 9), license-07.txt (rank 10), nda-01.txt (rank 11), dpa-04.txt (rank 12), sow-06.txt (rank 13) \u2026"
+        },
+        {
+          "code": "overlapping_evidence",
+          "detail": "1 overlapping passage(s) removed"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "insufficient_evidence",
+      "id": "aq-008",
+      "malformed_citations": [],
+      "question": "What penalty does the Master Services Agreement impose on the Supplier for late delivery of Services?",
+      "reference_evidence": {
+        "classification": null,
+        "complete_retrieved": null,
+        "complete_selected": null,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": null,
+        "required": 0,
+        "retrieved": 0,
+        "selected": 0
+      },
+      "reference_evidence_coverage": null,
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": null,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "insufficient_evidence",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.046,
+        "context_assembly": 0.188,
+        "generation": 4277.778,
+        "retrieval": 29.643,
+        "total": 4566.287
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": true,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The annual salary of the Vendor's chief executive officer under the Software Licence Agreement is not specified in the given passages.",
+      "answerable": false,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "Software means the object code version of the vendor's application made available to the Licensee under this Agreement."
+        },
+        {
+          "citations": [
+            "S2"
+          ],
+          "text": "Subject to payment of the licence fee, the Vendor grants the Licensee a perpetual, non-exclusive licence to install and use the Software for its internal business purposes."
+        },
+        {
+          "citations": [
+            "S3"
+          ],
+          "text": "The Vendor's total liability shall not exceed the licence fees paid in the twelve months preceding the claim."
+        },
+        {
+          "citations": [
+            "S4"
+          ],
+          "text": "Subject to payment of the licence fee, the Vendor grants the Licensee a perpetual, non-exclusive licence to install and use the Software for its internal business purposes."
+        },
+        {
+          "citations": [
+            "S5"
+          ],
+          "text": "The Licensee shall not sublicense, rent, lease or distribute the Software, nor use it to provide services to third parties, without the Vendor's prior written consent."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "18 passage(s) were retrieved but dropped because the evidence limit was reached: dpa-04.txt (rank 7), license-07.txt (rank 8), sow-06.txt (rank 9), msa-02.txt (rank 10), msa-02.txt (rank 11), nda-01.txt (rank 12) \u2026"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "insufficient_evidence",
+      "id": "aq-009",
+      "malformed_citations": [],
+      "question": "What is the annual salary of the Vendor's chief executive officer under the Software Licence Agreement?",
+      "reference_evidence": {
+        "classification": null,
+        "complete_retrieved": null,
+        "complete_selected": null,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": null,
+        "required": 0,
+        "retrieved": 0,
+        "selected": 0
+      },
+      "reference_evidence_coverage": null,
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": null,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "insufficient_evidence",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.039,
+        "context_assembly": 0.259,
+        "generation": 5207.181,
+        "retrieval": 34.309,
+        "total": 5508.379
+      },
+      "unknown_citation_ids": []
+    },
+    {
+      "abstained": false,
+      "all_citations_resolved": true,
+      "all_claims_cited": true,
+      "answer": "The cap on each party's aggregate liability under the Master Services Agreement is the fees paid or payable in the twelve months preceding the claim.",
+      "answerable": true,
+      "citation_valid": true,
+      "claims": [
+        {
+          "citations": [
+            "S1"
+          ],
+          "text": "Except for fraud and wilful misconduct, neither party's aggregate liability under this Agreement shall exceed the fees paid or payable in the twelve months preceding the claim."
+        },
+        {
+          "citations": [
+            "S2"
+          ],
+          "text": "Each party's liability under this Addendum is subject to the limitations set out in the main agreement."
+        }
+      ],
+      "diagnostics": [
+        {
+          "code": "evidence_excluded_by_max",
+          "detail": "17 passage(s) were retrieved but dropped because the evidence limit was reached: license-07.txt (rank 8), nda-01.txt (rank 9), saas-03.txt (rank 10), msa-02.txt (rank 11), reseller-05.txt (rank 12), license-07.txt (rank 13) \u2026"
+        },
+        {
+          "code": "overlapping_evidence",
+          "detail": "1 overlapping passage(s) removed"
+        },
+        {
+          "code": "evidence_included_but_uncited",
+          "detail": "4 selected passage(s) were not cited: S3, S4, S5, S6"
+        },
+        {
+          "code": "semantic_support_unverified",
+          "detail": "citation ids resolved, but whether the cited passages support each claim requires human review and is not asserted here"
+        }
+      ],
+      "excluded": 18,
+      "expected_status": "answered",
+      "id": "aq-010",
+      "malformed_citations": [],
+      "question": "What is the cap on each party's aggregate liability under the Master Services Agreement?",
+      "reference_evidence": {
+        "classification": "included",
+        "complete_retrieved": true,
+        "complete_selected": true,
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "partial_selected": false,
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      "reference_evidence_coverage": "included",
+      "reference_evidence_missing_retrieved": [],
+      "reference_evidence_missing_selected": [],
+      "reference_evidence_present": true,
+      "retrieved": 24,
+      "selected": 6,
+      "semantic_support": "not_determined",
+      "status": "answered",
+      "status_correct": true,
+      "structural_valid": true,
+      "timings_ms": {
+        "citation_validation": 0.042,
+        "context_assembly": 0.207,
+        "generation": 2443.672,
+        "retrieval": 29.043,
+        "total": 2726.518
+      },
+      "unknown_citation_ids": []
+    }
+  ],
+  "config": {
+    "candidate_depth": null,
+    "context_tokens": 2048,
+    "max_evidence": 6,
+    "mode": "bm25",
+    "model_id": "qwen2.5:1.5b-instruct",
+    "profile_id": "p-2c8893ea8e1621ef",
+    "prompt_variant": "v1",
+    "query_mode": "or",
+    "rerank": false,
+    "rerank_candidates": null,
+    "seed": 0
+  },
+  "counts": {
+    "answered": 8,
+    "generation_error": 0,
+    "insufficient_evidence": 2,
+    "partially_answered": 0,
+    "questions": 10
+  },
+  "created_at": "2026-10-16T08:29:03.472211+00:00",
+  "dataset": {
+    "collection": "legal-contracts",
+    "license": "CC0-1.0 (synthetic; no third-party text)",
+    "name": "legal-contracts-answers",
+    "source": "Bundled synthetic legal contracts (datasets/legal-contracts). Original text authored for RAG Workbench.",
+    "version": "1"
+  },
+  "evidence_loss": {
+    "cases": [
+      {
+        "classification": "included",
+        "id": "aq-001",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      {
+        "classification": "included",
+        "id": "aq-002",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      {
+        "classification": "included",
+        "id": "aq-003",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      {
+        "classification": "included",
+        "id": "aq-004",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      {
+        "classification": "included",
+        "id": "aq-005",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 2,
+        "retrieved": 2,
+        "selected": 2
+      },
+      {
+        "classification": "included",
+        "id": "aq-006",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      {
+        "classification": "included",
+        "id": "aq-007",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      },
+      {
+        "classification": "included",
+        "id": "aq-010",
+        "missing_retrieved": [],
+        "missing_selected": [],
+        "required": 1,
+        "retrieved": 1,
+        "selected": 1
+      }
+    ],
+    "included": 8,
+    "never_retrieved": 0,
+    "questions_with_reference": 8,
+    "retrieved_but_excluded": 0
+  },
+  "kind": "answer_quality",
+  "label": "RECOMMENDED baseline prompt (v1) | max_evidence=6 | seed=0",
+  "latency": {
+    "generation_ms": {
+      "count": 10,
+      "max": 5810.093,
+      "mean": 2854.53,
+      "min": 1564.662,
+      "p50": 1948.38,
+      "p95": 5810.093
+    },
+    "retrieval_ms": {
+      "count": 10,
+      "max": 632.017,
+      "mean": 149.43,
+      "min": 28.896,
+      "p50": 32.7,
+      "p95": 632.017
+    },
+    "total_ms": {
+      "count": 10,
+      "max": 6827.207,
+      "mean": 3279.905,
+      "min": 1884.847,
+      "p50": 2294.68,
+      "p95": 6827.207
+    }
+  },
+  "limitations": [
+    "Small and synthetic: it demonstrates the answer pipeline, not legal accuracy.",
+    "Reference answers are manually verified against the bundled contract text only.",
+    "Whether a cited passage genuinely supports a claim is not deterministically decidable and is not scored here.",
+    "Retrieval is BM25 by default; dense/rerank results depend on the installed optional extras and the chosen configuration.",
+    "Generation depends on the local model; answer quality is not comparable across models without re-running the set.",
+    "Reference coverage is a lexical-anchor check: complete coverage means the required anchors reached the context, not that the model used them correctly. Factual correctness and semantic support require human review."
+  ],
+  "metrics": {
+    "abstention_rate": 0.2,
+    "answer_claims_consistency": "not_determined",
+    "citation_validity_rate": 1.0,
+    "complete_reference_coverage_rate": 1.0,
+    "context_exclusion_rate": 1.0,
+    "correct_abstention_rate": 1.0,
+    "generation_failure_rate": 0.0,
+    "invalid_citation_rate": 0.0,
+    "malformed_citation_rate": 0.0,
+    "over_abstention_rate": 0.0,
+    "partial_reference_coverage_rate": 0.0,
+    "reference_evidence_included_rate": 1.0,
+    "reference_evidence_never_retrieved_rate": 0.0,
+    "reference_evidence_retrieved_but_excluded_rate": 0.0,
+    "reference_evidence_selected_rate": 1.0,
+    "reference_evidence_unit_coverage_rate": 1.0,
+    "reference_evidence_unit_retrieved_rate": 1.0,
+    "reference_evidence_units_required": 12,
+    "semantic_support": "not_determined",
+    "status_accuracy_rate": 0.9,
+    "structural_validity_rate": 1.0
+  },
+  "recommended": true,
+  "report_id": "aq-20261016T082903",
+  "runtime": {
+    "cpu_count": 16,
+    "implementation": "CPython",
+    "machine": "AMD64",
+    "packages": {
+      "numpy": "2.5.4",
+      "qdrant-client": "1.19.1",
+      "rag-workbench": "0.1.0",
+      "sentence-transformers": "6.1.0",
+      "sqlalchemy": "2.1.4",
+      "torch": "2.14.1",
+      "transformers": "5.19.0"
+    },
+    "platform": "Windows-11-10.0.26300-SP0",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "python": "3.13.5"
+  },
+  "schema_version": "1",
+  "source": "recorded"
+}

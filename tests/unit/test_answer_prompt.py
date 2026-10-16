@@ -59,3 +59,28 @@ def test_evidence_block_carries_provenance() -> None:
     assert "file: nda.txt" in block
     assert "page: 2" in block
     assert "section: 6. Term" in block
+
+
+def test_default_prompt_variant_is_v1() -> None:
+    # The audit found v2 did not improve abstention, so v1 stays the default while
+    # remaining selectable for reproducibility.
+    from rag_workbench.answering.prompt import DEFAULT_PROMPT_VARIANT
+
+    assert DEFAULT_PROMPT_VARIANT == "v1"
+    assert build_instructions() == build_instructions("v1")
+
+
+def test_prompt_variants_differ_and_v2_adds_definitions_and_abstain_example() -> None:
+    v1 = build_instructions("v1")
+    v2 = build_instructions("v2")
+    assert v1 != v2
+    # Both keep the trust boundary and the mechanical citation rule.
+    for text in (v1, v2):
+        assert "untrusted" in text.lower()
+        assert "insufficient_evidence" in text
+    # v2 adds explicit status definitions and a second (abstention) example.
+    assert "Status definitions" in v2
+    assert 'insufficient_evidence","answer":""' in v2
+    assert "Status definitions" not in v1
+    # An unknown variant falls back to the default rather than crashing.
+    assert build_instructions("nonsense") == build_instructions()

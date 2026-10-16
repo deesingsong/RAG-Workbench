@@ -267,16 +267,19 @@ Example rerank output (real cross-encoder, clause-aware profile, see §13):
 ```powershell
 # Generate a grounded answer locally (requires RAG_WORKBENCH_GENERATION_ENABLED=true)
 uv run rag-workbench answer ask "What is the notice period for termination?" `
-  --collection legal-contracts --query-mode or --max-evidence 4
+  --collection legal-contracts --query-mode or --max-evidence 6
 
-# Run the bundled grounded-answer quality set and print the metrics
+# Run the bundled grounded-answer quality set and print the metrics.
+# --seed makes repeated runs reproducible; --label names the configuration.
 uv run rag-workbench answer quality `
-  --profile <profile-id> --dataset answer-quality/legal-contracts-answers
+  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
+  --query-mode or --max-evidence 6 --seed 0 --label "v1 / me=6 / bm25 / or"
 
 # Record answer demos + a quality report as committed read-only artifacts
+# (--no-demos writes only the aggregate report, for a configuration sweep)
 uv run rag-workbench answer record `
   --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
-  --query-mode or --max-evidence 4 --label "bm25 / qwen2.5:1.5b-instruct"
+  --query-mode or --max-evidence 6 --seed 0 --label "recommended"
 
 # Inspect recorded demos with no model running
 uv run rag-workbench answer demos
@@ -284,8 +287,11 @@ uv run rag-workbench answer demo <demo-id>
 ```
 
 Answer artifacts live in `benchmarks/recorded_answers/`: one `answer_demo` JSON per
-question plus one `answer_quality` report. Both carry `source="recorded"` so the
-public demo can never present them as live inference.
+question plus one `answer_quality` report per configuration. All carry
+`source="recorded"` so the public demo can never present them as live inference.
+The instruction wording is selectable with `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT`
+(`v1` default, `v2` for the audited alternative — see §16). A fixed `--seed` makes
+a repeated request reproducible; leaving it unset samples normally.
 
 ### Try a PDF
 
@@ -400,10 +406,12 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_OLLAMA_TIMEOUT_S` | `120` | Per-request generation timeout. |
 | `RAG_WORKBENCH_OLLAMA_TEMPERATURE` | `0.1` | Sampling temperature. |
 | `RAG_WORKBENCH_OLLAMA_NUM_PREDICT` | `512` | Maximum tokens to generate. |
+| `RAG_WORKBENCH_OLLAMA_SEED` | unset | Optional sampling seed; set it to make repeated requests reproducible. |
 | `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE` | `false` | Explicit opt-in to a non-loopback Ollama endpoint. |
+| `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT` | `v1` | Instruction wording: `v1` (default) or `v2` (status definitions + abstention example; audited, §16). Wording only. |
 | `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
 | `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
-| `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality report for the read-only demo. |
+| `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality reports for the read-only demo. |
 
 ---
 
@@ -543,10 +551,11 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/experiments/{id}` | Full experiment record with per-query outcomes and traces. |
 | `GET` | `/v1/experiments/{id}/queries/{query_id}` | One query's metrics, diagnostics and ranked trace. |
 | `GET` | `/v1/experiments/{id}/export?format=json\|csv` | Download a full JSON record or a per-query CSV. |
-| `POST` | `/v1/answer` | `{question, profile_id?, mode?, collection?, query_mode?, candidate_depth?, max_evidence?, context_tokens?, temperature?, num_predict?, rerank?}` → grounded answer with selected evidence, citation verification and diagnostics. Needs `RAG_WORKBENCH_GENERATION_ENABLED=true` and a non-read-only deployment. |
+| `POST` | `/v1/answer` | `{question, profile_id?, mode?, collection?, query_mode?, candidate_depth?, max_evidence?, context_tokens?, temperature?, num_predict?, seed?, rerank?}` → grounded answer with selected evidence, citation verification and diagnostics. Needs `RAG_WORKBENCH_GENERATION_ENABLED=true` and a non-read-only deployment. |
 | `GET` | `/v1/answer-demos` | List recorded answer demonstrations (used by the read-only demo). |
 | `GET` | `/v1/answer-demos/{id}` | One recorded answer demonstration. |
 | `GET` | `/v1/answer-quality` | The newest recorded grounded-answer quality report. |
+| `GET` | `/v1/answer-quality-reports` | Every recorded quality report (summary), newest first, for configuration comparison. |
 
 `mode` accepts `bm25`, `dense` and `hybrid`. `query_mode` accepts `and` (the
 interactive default, every term must appear) and `or` (any term; BM25 ranks,
@@ -637,16 +646,20 @@ real RRF implementation:
 - **Answer (Phase 5):** context selection (sequential `[S#]` ids, duplicate and
   containment de-duplication, `max_evidence` and token-budget exclusion with an
   explicit reason for every dropped passage); deterministic citation verification
-  (unknown ids, uncited claims, `answered`-without-citations, and the
-  semantic-support property always reported `not_determined`); the prompt trust
-  boundary (retrieved text appears only in the delimited user message, never in
-  the trusted system instructions); the Ollama adapter over an in-memory HTTP
-  transport (model listing, availability, schema-valid parsing, code-fence
-  recovery, malformed / HTTP-error / timeout error results, and remote-endpoint
-  refusal); the recorded-artifact loader; the grounded-answer quality runner; and
-  the API — grounded answer, unknown-citation flagging, `generation_error`,
-  `503` when generation is disabled or unavailable, `403 read_only_mode`,
-  empty-evidence abstention, and the recorded demos / quality endpoints.
+  (unknown ids, uncited claims, `answered`-without-citations, **strict citation
+  parsing** so a string merely *containing* an id is rejected as malformed, and the
+  semantic-support and answer-vs-claims properties always reported `not_determined`);
+  reference-evidence coverage (`never_retrieved` / `retrieved_but_excluded` /
+  `included`, with partial vs. complete coverage kept distinct); the prompt trust
+  boundary and both instruction variants (retrieved text appears only in the
+  delimited user message, never in the trusted system instructions); the Ollama
+  adapter over an in-memory HTTP transport (model listing, availability, schema-valid
+  parsing, code-fence recovery, malformed / HTTP-error / timeout error results, and
+  remote-endpoint refusal); the recorded-artifact loader (demos and multiple quality
+  reports); the grounded-answer quality runner and its aggregation; and the API —
+  grounded answer, unknown-citation flagging, `generation_error`, `503` when
+  generation is disabled or unavailable, `403 read_only_mode`, empty-evidence
+  abstention, and the recorded demos / quality / quality-reports endpoints.
 - **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
   profile for the sample contract and returns the expected top clause.
 - **Reranker (opt-in, `-m reranker`):** the real
@@ -749,7 +762,10 @@ notice. Character counts are never used as token counts.
   `semantic_support` is always reported as `not_determined`. A small model can
   answer a question the passages do not support (see §16), add unsupported claims,
   or — as observed with 1.5B Qwen — fail citation-id formatting unless the output
-  schema constrains it (the schema now uses a `pattern` so decoding emits `S#`).
+  schema constrains it (the schema now uses a `pattern` so decoding emits `S#`). Its
+  abstention behaviour is also **not stable**: the same prompt and configuration can
+  abstain on one run and not another (§16), so a single recorded number is a draw,
+  not a property.
   Generation is refused in read-only mode and when disabled, so the public demo is
   not a model endpoint. Prompt-based defences reduce, but do not eliminate,
   prompt-injection risk from retrieved text.
@@ -785,15 +801,16 @@ src/rag_workbench/
   ingestion/           parsers, chunkers (incl. clause-aware), pipeline, vector indexer
   retrieval/           BM25, dense, hybrid (RRF), retrieval service (+ rerank stage)
   evaluation/          metrics, datasets, diagnostics, runner, experiments, service
-  answering/           context selection, prompt trust boundary, Ollama adapter,
-                       citation verification, pipeline, quality eval, recorded artifacts
+  answering/           context selection, prompt trust boundary (v1/v2 variants),
+                       Ollama adapter, citation verification, reference-evidence
+                       coverage, pipeline, quality eval, recorded artifacts
   api/                 FastAPI factory, dependencies, routes
 ui/streamlit_app.py    Thin HTTP client
 ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
 datasets/              Committed evaluation datasets (bundled legal-contracts,
                        answer-quality set)
 benchmarks/recorded/   Committed experiment artifacts for the read-only demo
-benchmarks/recorded_answers/  Committed recorded answer demos + quality report
+benchmarks/recorded_answers/  Committed recorded answer demos + quality reports
 tests/                 unit + integration tests, tiny redistributable fixtures
 .github/workflows/ci.yml
 ```
@@ -979,59 +996,126 @@ Setup:
   — no model was downloaded for this run. Ollama 0.11.x, CPU inference.
 - Corpus: the bundled synthetic `legal-contracts` set (7 contracts), ingested with
   the `clause_aware` profile `p-2c8893ea8e1621ef`.
-- Retrieval: BM25, `query_mode=or`, candidate pool 20, `max_evidence=4`,
-  `context_tokens=2048`. The committed report records the exact configuration it
-  ran with.
+- Retrieval: BM25, `query_mode=or`, candidate pool 20, `context_tokens=2048`.
+  `max_evidence` varies by run (4/6/8); the **recommended** live default is 6.
+- The quality set has ten questions: seven fully answerable, one partially
+  answerable and two unanswerable (one answer is absent from the corpus, one from
+  the specific contract).
 
-### Grounded-answer quality (`datasets/answer-quality/legal-contracts-answers.json`)
+Every report listed below is a real execution committed under
+`benchmarks/recorded_answers/aq-*.json`; `benchmarks/recorded_answers/` also holds
+the raw per-question answer demos. The API exposes the newest report at
+`/v1/answer-quality` and the full comparison list at `/v1/answer-quality-reports`,
+which the Answer Laboratory renders as a table.
 
-Ten questions: seven fully answerable, one partially answerable and two
-unanswerable (one answer is absent from the corpus, one from the specific
-contract). The committed report is `benchmarks/recorded_answers/aq-*.json`.
+### The original committed run (`aq-20261015T225614`, `max_evidence=4`)
 
 | Metric | Value |
 |---|---|
 | structural validity (schema-valid output) | 1.00 |
 | citation validity (cited ids resolve to selected passages) | 0.90 |
-| invalid-citation rate | 0.00 |
-| reference evidence selected into context | 1.00 |
 | **correct abstention on the unanswerable questions** | **0.00** |
 | over-abstention on answerable questions | 0.00 |
 | generation failures | 0.00 |
 | semantic support | *not determined* |
 
-What this honestly shows:
+The original run answered all ten questions, including the two unanswerable ones.
+Re-running the **identical** prompt and configuration later on the same machine now
+abstains correctly on both (`correct_abstention_rate = 1.00`, stable across seeded
+and unseeded repeats). The model artifact in Ollama was re-imported between the two
+runs (`modified_at` moved from 2026-10-15 to 2026-10-16), so the original `0.00` is
+recorded here as **one non-reproducible draw**, not a stable property of the
+pipeline. Both the original and the re-runs are kept as committed artifacts.
 
-- **Structural and citation verification work.** Every output satisfied the JSON
-  schema, and 9 of 10 answers cited only passage ids that really were selected. The
-  one invalid-citation case is reported as `citation_valid=false` with the exact
-  unknown id, not hidden.
-- **A small model does not reliably abstain.** Both unanswerable questions were
-  answered anyway (`correct_abstention_rate = 0.00`). Retrieval returned candidate
-  passages — so the model had *something* to work with — but none contained the
-  answer, and the model produced a cited-looking answer regardless. This is exactly
-  the grounding failure the abstention and `semantic_support = not_determined`
-  signals exist to surface: the pipeline never claims such an answer is supported.
-- **Semantic support is not asserted here.** Whether a cited passage truly supports
-  each claim needs human review and is reported as `not_determined` throughout.
-- **Schema detail matters for small models.** Runs whose citation schema had no
-  `pattern` produced `citations` containing file names or section titles
-  (e.g. `[1](saas-03.txt)`) instead of `S#` ids; the deterministic verifier flagged
-  every one. Constraining the citation schema with a `pattern` so decoding emits
-  `S#` moved citation validity to 0.90. Reported as a reproducible observation
-  about small-model format compliance, not a general claim.
+### Evidence-loss audit: why `aq-002` was answered wrongly
 
-### Latency (same run, single machine, CPU)
+`aq-002` asks two things — the invoicing period **and** the late-payment interest.
+It is the interesting failure: the late-payment clause (`msa-02::3.2`, containing
+"one percent per month") *was* retrieved (rank 5) but was **dropped from the
+context**, while the invoicing clause reached the model. The old metric only asked
+"was *any* reference keyword present?", so it reported full coverage (1.00) and hid
+the loss.
 
-| Stage | p50 |
+Coverage is now computed per required evidence unit and classified three ways
+(`src/rag_workbench/answering/reference.py`): **`included`** (every required anchor
+reached the context), **`retrieved_but_excluded`** (retrieved but dropped by
+`max_evidence` or the token budget) and **`never_retrieved`** (absent from the whole
+pool). Complete and partial coverage are reported separately:
+
+| Metric | Value |
+|---|---|
+| complete reference coverage | 0.875 (7/8 anchored questions) |
+| partial reference coverage | 0.125 (`aq-002`) |
+| per-anchor coverage (units selected / required) | 0.917 (11/12) |
+| evidence included / retrieved-but-excluded / never-retrieved | 7 / 1 / 0 |
+
+`aq-002` is likewise visible at runtime: its `evidence_excluded_by_max` diagnostic
+now names the dropped passages instead of reporting a bare count.
+
+### Controlled configuration comparison
+
+Configurations recorded with a fixed `seed=0` (unseeded repeats of the same
+config agreed, so the differences below are configuration effects, not sampling
+noise). All runs use the same corpus, profile and BM25/`or` retrieval. The chosen
+configuration is marked `recommended` in its report, which is what
+`GET /v1/answer-quality` headlines for the read-only demo while
+`/v1/answer-quality-reports` lists them all.
+
+| Report | Prompt | max_ev | Citation validity | Correct abstention | Answer-state accuracy | Complete ref. coverage | gen p50 |
+|---|---|---|---|---|---|---|---|
+| `…225614` (original) | v1 | 4 | 0.90 | 0.00 | — | — | 3.12 s |
+| `…081735` | v1 | 4 | 1.00 | 1.00 | 0.90 | 0.875 | 1.80 s |
+| **`…082903` (recommended)** | **v1** | **6** | **1.00** | **1.00** | **0.90** | **1.00** | **1.95 s** |
+| `…081839` | v1 | 8 | 1.00 | 1.00 | 0.90 | 1.00 | 1.97 s |
+| `…081904` | v2 | 4 | 1.00 | 0.50 | 0.80 | 0.875 | 1.96 s |
+| `…081932` | v2 | 6 | 0.90 | 1.00 | 0.90 | 1.00 | 1.81 s |
+
+What this shows:
+
+- **`max_evidence=6` resolves the evidence loss.** Raising the limit from 4 to 6
+  takes complete reference coverage from 0.875 to 1.00 (it selects `msa-02::3.2`),
+  improving answer-state accuracy to 0.90 with no meaningful latency change. Going
+  to 8 buys nothing further — a concrete demonstration that *more context is not
+  automatically better*.
+- **The "clearer status definitions + abstention example" prompt did not help.**
+  It is recorded as variant `v2` and compared directly against the original `v1` at
+  the same config. At `max_evidence=4`, `v2` **regressed** correct abstention from
+  1.00 to 0.50 — it answered `aq-008` (late-delivery penalty) with an unrelated
+  indemnification clause instead of abstaining — and at `max_evidence=6` it
+  produced one invalid citation. The hypothesis is therefore **not supported**;
+  `v1` remains the default and `v2` is kept selectable (via
+  `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT=v2`) purely for reproducibility.
+- **Coverage is not correctness.** See `aq-007` below: complete coverage can coexist
+  with a wrong answer.
+
+### Preserved failure: `aq-007` (citation resolves, but does not support)
+
+`aq-007` asks the NDA's governing law **and** a disaster-recovery objective. The
+correct first part is *Delaware*, and the Delaware clause (`nda-01::8`) **was**
+selected into the context. The model nevertheless answered *"governed by the laws of
+the State of California"* and marked the answer `answered`, citing `S1` — which is
+the NDA preamble, not the governing-law clause.
+
+This is kept deliberately, because it is the exact class of error the deterministic
+verifier **cannot** catch: `S1` is a real selected passage, so `citation_valid` is
+`true`; whether it *supports* the claim is semantic and is reported as
+`not_determined`. The Answer Laboratory now shows each claim next to the verbatim
+text of the passage(s) it cites, so the mismatch is inspectable rather than hidden:
+the cited text is the preamble while the claim is about governing law. Citation
+completeness is likewise split into mechanical properties (every id resolves, every
+claim is cited) and a `not_determined` "answer text vs. structured claims"
+consistency property that is never asserted automatically.
+
+### Latency (single machine, CPU, 1.5B Q8)
+
+| Stage | p50 (recommended run) |
 |---|---|
 | retrieval (BM25, 20-candidate pool) | ~28 ms |
-| generation (1.5B, Q8, CPU) | ~3.1 s |
-| total per question | ~3.4 s |
+| generation | ~1.94 s |
+| total per question | ~2.23 s |
 
-First-call latency is higher because the model is loaded on demand. These are the
-values recorded in the committed report; run `rag-workbench answer record` to
-reproduce them with your own model.
+First-call latency is higher because the model is loaded on demand. Run
+`rag-workbench answer record` to reproduce with your own model.
 
 ---
 

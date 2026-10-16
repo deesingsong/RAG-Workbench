@@ -77,13 +77,24 @@ artifacts**, recorded by:
 
 ```powershell
 uv run rag-workbench answer record --profile <profile-id> `
-  --dataset answer-quality/legal-contracts-answers --query-mode or --max-evidence 4
+  --dataset answer-quality/legal-contracts-answers --query-mode or --max-evidence 6 --seed 0
 ```
 
-It contains one `answer_demo` JSON per question (the full answer record: question,
-selected evidence, generated answer, claims/citations, deterministic verification,
+It contains `answer_demo` JSON files (the full answer record: question, selected
+evidence, generated answer, claims/citations, deterministic verification,
 retrieved-vs-selected context, diagnostics, model identity and timings) and one
-`answer_quality` report (the aggregate metrics over the grounded-answer set). Both
-carry `source="recorded"`, so the read-only deployment can never present them as
-live inference. The quality metrics and their honest interpretation are in the
-README §16.
+`answer_quality` report **per configuration**. All carry `source="recorded"`, so the
+read-only deployment can never present them as live inference.
+
+The directory intentionally holds more than one report. The **original** Phase-5
+run (`aq-20261015T225614.json`) is preserved unedited, and later runs record a
+controlled configuration comparison (baseline vs. an alternative prompt; and
+`max_evidence` 4/6/8). Multiple reports coexist because they are different
+experiments, not revisions of one result: the API's newest-report endpoint returns
+the recommended configuration while `/v1/answer-quality-reports` (and the Answer
+Laboratory) lists them all for side-by-side comparison. See the README §16 for the
+metrics and their honest interpretation, including the preserved `aq-007` failure.
+
+`--seed` fixes sampling so a repeated configuration is reproducible; omit it for
+normal sampling. Add `--no-demos` to record only the aggregate report when sweeping
+configurations.
