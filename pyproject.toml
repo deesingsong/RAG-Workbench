@@ -1,6 +1,6 @@
 [project]
 name = "rag-workbench"
-version = "0.2.0"
+version = "0.2.1"
 description = "Local-first RAG retrieval engineering laboratory (ingestion, BM25, dense and hybrid retrieval)."
 readme = "README.md"
 requires-python = ">=3.12"
