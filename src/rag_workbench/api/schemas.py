@@ -6,10 +6,11 @@ envelopes and error shapes but no business logic.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from rag_workbench.domain.schemas import (
     ChunkRecord,
@@ -20,6 +21,29 @@ from rag_workbench.domain.schemas import (
     VectorIndexStatus,
     VectorRebuildResult,
 )
+
+#: Absolute upper bound on a single authenticator response payload. Real WebAuthn
+#: responses are a few kilobytes; this keeps a hostile request from forcing large
+#: JSON parsing before the cryptographic checks even start.
+_MAX_CREDENTIAL_BYTES = 64 * 1024
+
+
+def _validate_credential_payload(value: dict) -> dict:
+    """Reject oversized or structurally implausible authenticator responses.
+
+    Only shape and size are checked here; the cryptographic validity is decided
+    by the WebAuthn verification library, never by this validation.
+    """
+
+    if "id" not in value or "response" not in value:
+        raise ValueError("a WebAuthn credential needs at least 'id' and 'response'")
+    try:
+        encoded = json.dumps(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("WebAuthn credential is not JSON-serialisable") from exc
+    if len(encoded) > _MAX_CREDENTIAL_BYTES:
+        raise ValueError("WebAuthn credential payload is too large")
+    return value
 
 
 class HealthResponse(BaseModel):
@@ -275,6 +299,55 @@ class OwnerEvaluationRequest(BaseModel):
     label: str | None = Field(default=None, max_length=120)
 
 
+class WebAuthnOptionsResponse(BaseModel):
+    """A server-generated WebAuthn challenge plus the options for the browser."""
+
+    handle: str
+    options: str
+
+
+class WebAuthnRegisterVerifyRequest(BaseModel):
+    """The owner's authenticator response to a registration challenge."""
+
+    handle: str = Field(min_length=1, max_length=256)
+    credential: dict
+    label: str | None = Field(default=None, max_length=80)
+
+    @field_validator("credential")
+    @classmethod
+    def _bounded_credential(cls, value: dict) -> dict:
+        return _validate_credential_payload(value)
+
+
+class WebAuthnLoginVerifyRequest(BaseModel):
+    """The owner's authenticator assertion response for authentication."""
+
+    handle: str = Field(min_length=1, max_length=256)
+    credential: dict
+
+    @field_validator("credential")
+    @classmethod
+    def _bounded_credential(cls, value: dict) -> dict:
+        return _validate_credential_payload(value)
+
+
+class WebAuthnCredentialResponse(BaseModel):
+    """The verified *public* credential record to persist in trusted config."""
+
+    credential: dict
+
+
+class OwnerSessionResponse(BaseModel):
+    """Visitor owner-authentication status. Never includes the session bearer."""
+
+    authenticated: bool
+    session_token: str | None = None
+    credential_label: str | None = None
+    issued_at: str | None = None
+    expires_at: str | None = None
+    absolute_expires_at: str | None = None
+
+
 class ExperimentSummary(BaseModel):
     experiment_id: str
     source: str
@@ -327,11 +400,12 @@ class AppConfigResponse(BaseModel):
     scaling_max_documents: int = 0
     # Laboratory Controls: per-capability availability/permission (never the
     # session toggle, which belongs to the frontend) and the non-sensitive owner
-    # policy. No token or credential is ever included.
+    # policy. No secret, session token or visitor authentication status is ever
+    # included here.
     laboratory: dict = {}
     owner_evaluations_enabled: bool = False
-    owner_token_configured: bool = False
     owner_evaluation_policy: dict = {}
+    passkey: dict = {}
 
 
 __all__ = [
@@ -350,6 +424,7 @@ __all__ = [
     "IngestionJobResponse",
     "IngestionResult",
     "OwnerEvaluationRequest",
+    "OwnerSessionResponse",
     "ProfileListResponse",
     "SearchRequest",
     "SearchResponse",
@@ -357,4 +432,8 @@ __all__ = [
     "VectorRebuildResponse",
     "VectorReconcileRequest",
     "VectorStatusResponse",
+    "WebAuthnCredentialResponse",
+    "WebAuthnLoginVerifyRequest",
+    "WebAuthnOptionsResponse",
+    "WebAuthnRegisterVerifyRequest",
 ]

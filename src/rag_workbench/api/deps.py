@@ -12,8 +12,10 @@ import hmac
 from fastapi import Depends, Request
 
 from rag_workbench.answering.pipeline import AnswerService
+from rag_workbench.auth.owner_auth import OwnerAuthService
 from rag_workbench.config import Settings
 from rag_workbench.domain.errors import (
+    BootstrapDisabledError,
     GeneratorUnavailableError,
     OwnerAuthError,
     OwnerEvaluationsDisabledError,
@@ -101,26 +103,40 @@ def require_generation(settings: Settings = Depends(get_settings)) -> None:
         )
 
 
-#: Header carrying the owner test token. Kept out of query strings and URLs so it
-#: is never written to access logs or browser history.
-_OWNER_TOKEN_HEADER = "X-Owner-Token"
+def get_owner_auth_service(request: Request) -> OwnerAuthService:
+    return request.app.state.owner_auth_service
+
+
+#: Header carrying the backend-issued owner session token. The token is sent by
+#: the Streamlit Python process (never by page JavaScript) over the internal HTTP
+#: connection and is kept out of URLs so it cannot land in access logs or history.
+_OWNER_SESSION_HEADER = "Authorization"
+
+#: Header carrying the one-time bootstrap enrollment secret. Distinct from the
+#: session bearer: it authorizes first-time passkey registration only.
+_BOOTSTRAP_HEADER = "X-Bootstrap-Token"
+
+
+def _bearer_token(request: Request) -> str:
+    raw = request.headers.get(_OWNER_SESSION_HEADER, "")
+    if raw.lower().startswith("bearer "):
+        return raw[7:].strip()
+    return ""
 
 
 def require_owner(
-    request: Request, settings: Settings = Depends(get_settings)
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    auth: OwnerAuthService = Depends(get_owner_auth_service),
 ) -> None:
     """Authorize a bounded owner evaluation, independently of any UI state.
 
-    Three backends-enforced gates, in order:
+    Two backends-enforced gates, in order:
 
     * the deployment must explicitly enable hosted owner evaluations (default
-      disabled), otherwise 403;
-    * an owner test token must be configured outside the repository, otherwise
-      the feature is unusable (401); and
-    * the supplied ``X-Owner-Token`` header must match in constant time.
-
-    The comparison is constant-time and the configured token is never echoed in
-    the message, a response body or a log line.
+      disabled) as an emergency kill switch, otherwise 403; and
+    * a valid owner session (issued only after a verified passkey assertion) must
+      be presented, otherwise 401.
     """
 
     if not settings.owner_evaluations_enabled:
@@ -128,12 +144,26 @@ def require_owner(
             "hosted owner evaluations are disabled; set "
             "RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true to enable them"
         )
-    expected = settings.owner_test_token
-    if not expected or not expected.strip():
-        raise OwnerAuthError(
-            "no owner test token is configured on this deployment; set "
-            "RAG_WORKBENCH_OWNER_TEST_TOKEN"
+    if auth.session_info(_bearer_token(request)) is None:
+        raise OwnerAuthError("a valid owner session is required")
+
+
+def require_bootstrap(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+) -> None:
+    """Authorize one-time owner passkey enrollment with the bootstrap secret.
+
+    Fails closed when bootstrap is disabled or has no secret, and compares the
+    supplied secret in constant time. The secret is never echoed back.
+    """
+
+    if not settings.webauthn_bootstrap_ready:
+        raise BootstrapDisabledError(
+            "owner passkey bootstrap enrollment is disabled; set "
+            "RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN to enroll once"
         )
-    supplied = request.headers.get(_OWNER_TOKEN_HEADER, "")
+    expected = settings.webauthn_bootstrap_token or ""
+    supplied = request.headers.get(_BOOTSTRAP_HEADER, "")
     if not supplied or not hmac.compare_digest(supplied, expected):
-        raise OwnerAuthError("invalid or missing owner test token")
+        raise BootstrapDisabledError("invalid or missing bootstrap secret")

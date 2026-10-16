@@ -299,12 +299,42 @@ class Settings(BaseSettings):
     # backend never reads it. What lives here is what the deployment *permits*,
     # and the backend enforces it regardless of any UI toggle.
     #
-    # Optional, narrowly scoped owner evaluations for a hosted deployment that is
-    # otherwise read-only. Disabled by default and only usable when a secret token
-    # is configured outside the repository. The token is compared in constant time
-    # and is never returned by any API response or written to a log.
+    # ``owner_evaluations_enabled`` is the emergency deployment-level kill switch
+    # for the bounded hosted owner evaluation. It is configured once by the
+    # operator and is *not* part of routine owner sign-in.
     owner_evaluations_enabled: bool = False
-    owner_test_token: str | None = None
+
+    # Owner Mode authentication: WebAuthn / passkey (this replaces the previous
+    # manually entered shared token). These are trusted deployment settings.
+    #
+    # ``webauthn_rp_id`` and ``webauthn_origins`` are the deployment's real
+    # hostname and scheme+host. They are never derived from request Host or
+    # forwarded headers, and a passkey registered for one relying-party ID is not
+    # valid for another (so a localhost passkey cannot unlock the hosted app).
+    webauthn_rp_id: str = ""
+    webauthn_rp_name: str = "RAG Workbench"
+    webauthn_origins: tuple[str, ...] = ()
+    # JSON array of approved *public* credential records (see README). Public keys
+    # and credential IDs are not secret; the private key never leaves the
+    # authenticator (e.g. Windows Hello) and is never requested or stored here.
+    webauthn_credentials: str = "[]"
+    # One-time bootstrap enrollment. Disabled by default. The bootstrap token is
+    # a temporary secret configured outside the repository and removed once the
+    # owner passkey is registered; it is not used for recurring authentication.
+    webauthn_bootstrap_enabled: bool = False
+    webauthn_bootstrap_token: str | None = None
+    # Stable (non-secret) WebAuthn user handle for the single owner.
+    webauthn_owner_user_id: str = "rag-workbench-owner"
+    # Server-side bounds, enforced independently of any request.
+    webauthn_challenge_ttl_s: int = Field(default=300, ge=30, le=3600)
+    webauthn_max_pending_challenges: int = Field(default=16, ge=1, le=256)
+    webauthn_session_idle_ttl_s: int = Field(default=900, ge=60, le=86400)
+    webauthn_session_absolute_ttl_s: int = Field(default=28800, ge=300, le=604800)
+    webauthn_max_sessions: int = Field(default=8, ge=1, le=64)
+    webauthn_registration_max_attempts: int = Field(default=5, ge=1, le=100)
+    webauthn_authentication_max_attempts: int = Field(default=20, ge=1, le=1000)
+    webauthn_rate_window_s: int = Field(default=300, ge=10, le=86400)
+
     # Server-side bounds for owner evaluations, enforced independently of the
     # request. Only these bundled datasets may be evaluated, BM25 only.
     owner_allowed_datasets: tuple[str, ...] = ("legal-contracts",)
@@ -316,10 +346,20 @@ class Settings(BaseSettings):
     owner_eval_max_runtime_s: float = Field(default=60.0, gt=0, le=600)
 
     @property
-    def owner_token_configured(self) -> bool:
-        """Whether an owner test token is present, without ever revealing it."""
+    def webauthn_configured(self) -> bool:
+        """Whether an RP ID and at least one accepted origin are configured."""
 
-        return bool(self.owner_test_token and self.owner_test_token.strip())
+        return bool(self.webauthn_rp_id.strip() and self.webauthn_origins)
+
+    @property
+    def webauthn_bootstrap_ready(self) -> bool:
+        """Whether one-time bootstrap enrollment may proceed."""
+
+        return bool(
+            self.webauthn_bootstrap_enabled
+            and self.webauthn_bootstrap_token
+            and self.webauthn_bootstrap_token.strip()
+        )
 
     @property
     def max_upload_bytes(self) -> int:

@@ -22,13 +22,17 @@ from rag_workbench.api.routes import (
     evaluation,
     health,
     owner,
+    owner_auth,
     scaling,
     search,
     vectors,
 )
+from rag_workbench.auth.owner_auth import OwnerAuthService
 from rag_workbench.build import deployment_revision
 from rag_workbench.config import Settings, find_repo_root, get_settings
 from rag_workbench.domain.errors import (
+    AuthenticationThrottledError,
+    BootstrapDisabledError,
     DatasetError,
     DenseUnavailableError,
     DimensionMismatchError,
@@ -51,6 +55,8 @@ from rag_workbench.domain.errors import (
     UnsupportedFileTypeError,
     ValidationError,
     VectorStoreError,
+    WebAuthnNotConfiguredError,
+    WebAuthnVerificationError,
 )
 from rag_workbench.evaluation.owner import OwnerEvaluationService
 from rag_workbench.evaluation.service import EvaluationService
@@ -87,6 +93,10 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     OwnerAuthError: 401,
     OwnerEvaluationsDisabledError: 403,
     OwnerLimitError: 422,
+    WebAuthnVerificationError: 400,
+    WebAuthnNotConfiguredError: 403,
+    BootstrapDisabledError: 403,
+    AuthenticationThrottledError: 429,
 }
 
 
@@ -130,6 +140,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.owner_evaluation_service = OwnerEvaluationService(
         settings, app.state.evaluation_service
     )
+    app.state.owner_auth_service = OwnerAuthService(settings)
     app.state.answer_service = AnswerService(
         database, settings, app.state.search_service
     )
@@ -166,6 +177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(vectors.router, prefix="/v1")
     app.include_router(evaluation.router, prefix="/v1")
     app.include_router(owner.router, prefix="/v1")
+    app.include_router(owner_auth.router, prefix="/v1")
     app.include_router(answer.router, prefix="/v1")
     app.include_router(scaling.router, prefix="/v1")
     return app

@@ -202,6 +202,7 @@ def app_config(
     scaling_service = request.app.state.scaling_service
     scaling_benchmarks = scaling_service.list_benchmarks()
     owner_service = request.app.state.owner_evaluation_service
+    owner_auth = request.app.state.owner_auth_service
     generation_available = bool(generation.get("available"))
 
     # Laboratory Controls capability status: available vs permitted, with a clear
@@ -247,20 +248,26 @@ def app_config(
             else ""
         ),
     )
-    if not settings.owner_evaluations_enabled:
+    # Owner Mode: the capability is whether a passkey could be used at all
+    # (relying party configured and at least one credential registered). The
+    # visitor's *own* authentication status is deliberately not reported here.
+    owner_available = owner_auth.available and owner_auth.credential_count > 0
+    if not owner_auth.available:
+        owner_reason = (
+            "owner passkey authentication is not configured on this deployment"
+        )
+    elif owner_auth.credential_count == 0:
+        owner_reason = "no owner passkey is registered yet"
+    elif not settings.owner_evaluations_enabled:
         owner_reason = (
             "owner evaluations are disabled; set "
             "RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true to enable them"
         )
-    elif not settings.owner_token_configured:
-        owner_reason = (
-            "no owner test token is configured; set RAG_WORKBENCH_OWNER_TEST_TOKEN"
-        )
     else:
         owner_reason = ""
     owner_capability = _capability(
-        available=settings.owner_token_configured,
-        permitted=settings.owner_evaluations_enabled and settings.owner_token_configured,
+        available=owner_available,
+        permitted=settings.owner_evaluations_enabled and owner_available,
         reason=owner_reason,
     )
 
@@ -308,7 +315,8 @@ def app_config(
         "scaling_max_documents": settings.scaling_max_documents,
         # Laboratory Controls (runtime capability status) and the optional owner
         # evaluation boundary. Only non-sensitive facts are exposed; the owner
-        # token itself is never included.
+        # secret, session token and any visitor authentication status are never
+        # included.
         "laboratory": {
             "evaluation": eval_capability,
             "generation": generation_capability,
@@ -316,6 +324,6 @@ def app_config(
             "owner_evaluation": owner_capability,
         },
         "owner_evaluations_enabled": settings.owner_evaluations_enabled,
-        "owner_token_configured": settings.owner_token_configured,
         "owner_evaluation_policy": owner_service.policy.summary(),
+        "passkey": owner_auth.public_summary(),
     }

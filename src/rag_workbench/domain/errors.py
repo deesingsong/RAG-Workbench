@@ -127,7 +127,7 @@ class ReadOnlyModeError(RagWorkbenchError):
 
 
 class OwnerAuthError(RagWorkbenchError):
-    """An owner-only request lacked a valid, configured owner test token."""
+    """An owner-only request lacked a valid, configured owner session."""
 
     code = "owner_unauthorized"
 
@@ -142,6 +142,30 @@ class OwnerLimitError(RagWorkbenchError):
     """An owner evaluation exceeded one of the server-side bounds."""
 
     code = "owner_limit_exceeded"
+
+
+class WebAuthnVerificationError(RagWorkbenchError):
+    """A WebAuthn registration or authentication response failed verification."""
+
+    code = "webauthn_verification_failed"
+
+
+class WebAuthnNotConfiguredError(RagWorkbenchError):
+    """Owner Mode is unavailable because no relying party or credential is set up."""
+
+    code = "webauthn_not_configured"
+
+
+class BootstrapDisabledError(RagWorkbenchError):
+    """Owner passkey bootstrap enrollment is disabled or the secret is invalid."""
+
+    code = "bootstrap_disabled"
+
+
+class AuthenticationThrottledError(RagWorkbenchError):
+    """Too many owner authentication attempts were made in the current window."""
+
+    code = "authentication_throttled"
 
 
 class GenerationError(RagWorkbenchError):

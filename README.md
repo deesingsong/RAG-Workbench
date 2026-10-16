@@ -99,8 +99,10 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
   it) and *session-enabled* (the visitor's own toggle, held only in Streamlit
   session state). A toggle never bypasses backend authorization — a read-only
   deployment still returns `403` for a privileged request. An optional
-  **authenticated owner mode** lets the operator run small, server-bounded BM25
-  evaluations while the public deployment remains read-only.
+  **authenticated owner mode** — signed in with a **WebAuthn passkey** (Windows
+  Hello, Touch ID, a security key), never a shared token — lets the operator run
+  small, server-bounded BM25 evaluations while the public deployment remains
+  read-only.
 - **Scalability engineering** (Phase 6): a bounded, reproducible **performance
   harness** over a deterministic synthetic corpus (ingestion throughput, on-disk
   footprint and BM25 latency by corpus size), a **deterministic capacity model**
@@ -422,11 +424,14 @@ Cloud runs one Streamlit process and cannot run a separate FastAPI process:
   the backend refuses. In read-only mode its evaluation/generation/ingestion
   toggles are disabled and explain why, and the public app still returns `403`
   for every privileged request. Optionally, an operator may enable the
-  authenticated **owner mode** (`RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true`
-  plus a `RAG_WORKBENCH_OWNER_TEST_TOKEN` secret) to run small, server-bounded
-  BM25 evaluations on the bundled `legal-contracts` dataset while the deployment
-  stays read-only for everyone else. The token is sent only as an
-  `X-Owner-Token` header, compared in constant time and never logged or returned.
+  authenticated **owner mode** (`RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true`)
+  and sign in with a WebAuthn passkey to run small, server-bounded BM25
+  evaluations on the bundled `legal-contracts` dataset while the deployment stays
+  read-only for everyone else. The passkey private key never leaves the owner's
+  device; the backend stores only public credential records, requires user
+  verification, verifies the assertion against a single-use challenge and issues
+  a short-lived server-side session. No shared token and no frontend boolean can
+  unlock it — see §18.
 
 To deploy:
 
@@ -449,10 +454,19 @@ To deploy:
    ```toml
    RAG_WORKBENCH_READ_ONLY = "true"
    RAG_WORKBENCH_AUTOSEED_SAMPLE = "true"
-   # Optional, for the authenticated owner mode:
+   # Optional, for the authenticated owner mode (WebAuthn passkey):
    # RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"
-   # RAG_WORKBENCH_OWNER_TEST_TOKEN = "<a long random secret kept outside the repo>"
+   # RAG_WORKBENCH_WEBAUTHN_RP_ID = "<the app host, e.g. rag-workbench-xxxx.streamlit.app>"
+   # RAG_WORKBENCH_WEBAUTHN_ORIGINS = '["https://rag-workbench-xxxx.streamlit.app"]'
+   # RAG_WORKBENCH_WEBAUTHN_CREDENTIALS = '<one-item JSON array, saved after bootstrap>'
    ```
+
+   The passkey is enrolled once through a temporary bootstrap: set
+   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED = "true"` and
+   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN = "<a long random secret>"`, register a
+   passkey in the sidebar's **Owner Mode** panel, paste the returned record into
+   `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS`, then set bootstrap back to `"false"` and
+   delete the token. See §18.
 
 Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
 store reset when the app sleeps or reboots (hence the auto-seed, which also
@@ -518,15 +532,28 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
 | `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
 | `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
 | `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality reports for the read-only demo. |
-| `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED` | `false` | Explicit opt-in for the hosted, authenticated owner evaluation endpoint. Off by default. |
-| `RAG_WORKBENCH_OWNER_TEST_TOKEN` | unset | Secret compared in constant time for owner requests (`X-Owner-Token` header). Configure outside the repo; never logged or returned. |
+| `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED` | `false` | Emergency deployment-level kill switch for the hosted owner evaluation endpoint. Off by default; not part of routine sign-in. |
+| `RAG_WORKBENCH_WEBAUTHN_RP_ID` | unset | Owner Mode relying-party ID (the deployment's hostname). Trusted config, never derived from request headers. |
+| `RAG_WORKBENCH_WEBAUTHN_RP_NAME` | `RAG Workbench` | Human-readable relying-party name shown by the authenticator. |
+| `RAG_WORKBENCH_WEBAUTHN_ORIGINS` | `[]` | Accepted origins for WebAuthn ceremonies (JSON array); a passkey registered for another RP ID is rejected. |
+| `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` | `[]` | Approved **public** credential records (JSON array), saved after one-time bootstrap enrollment. Contains no private key. |
+| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED` | `false` | Temporary one-time enrollment switch. Disable after the passkey is registered. |
+| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN` | unset | Secret authorizing first-time passkey registration only (`X-Bootstrap-Token` header). Compared in constant time; never logged or returned. |
+| `RAG_WORKBENCH_WEBAUTHN_CHALLENGE_TTL_S` | `300` | Maximum age of a single-use WebAuthn challenge. |
+| `RAG_WORKBENCH_WEBAUTHN_MAX_PENDING_CHALLENGES` | `16` | Bound on outstanding challenges. |
+| `RAG_WORKBENCH_WEBAUTHN_SESSION_IDLE_TTL_S` | `900` | Owner session idle timeout (sliding). |
+| `RAG_WORKBENCH_WEBAUTHN_SESSION_ABSOLUTE_TTL_S` | `28800` | Owner session absolute lifetime. |
+| `RAG_WORKBENCH_WEBAUTHN_MAX_SESSIONS` | `8` | Bound on concurrent owner sessions. |
+| `RAG_WORKBENCH_WEBAUTHN_REGISTRATION_MAX_ATTEMPTS` | `5` | Registration attempts allowed per window before `429`. |
+| `RAG_WORKBENCH_WEBAUTHN_AUTHENTICATION_MAX_ATTEMPTS` | `20` | Authentication attempts allowed per window before `429`. |
+| `RAG_WORKBENCH_WEBAUTHN_RATE_WINDOW_S` | `300` | Sliding window for the registration/authentication attempt limits. |
 | `RAG_WORKBENCH_OWNER_ALLOWED_DATASETS` | `["legal-contracts"]` | Bundled datasets a bounded owner evaluation may use (JSON array). |
 | `RAG_WORKBENCH_OWNER_EVAL_MAX_QUERIES` | `20` | Server-side cap on queries per owner evaluation. |
 | `RAG_WORKBENCH_OWNER_EVAL_MAX_CANDIDATE_DEPTH` | `100` | Server-side cap on candidate depth for owner evaluations. |
 | `RAG_WORKBENCH_OWNER_EVAL_MAX_TOP_K` | `10` | Server-side cap on `top_k` for owner evaluations. |
 | `RAG_WORKBENCH_OWNER_EVAL_MAX_DOCUMENTS` | `50` | Cap on documents ingested from the trusted fixture before an owner evaluation. |
 | `RAG_WORKBENCH_OWNER_EVAL_MAX_CONCURRENCY` | `1` | Maximum concurrently running owner evaluation jobs. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_RUNTIME_S` | `60` | Wall-clock budget for one owner evaluation; exceeding it raises `400`. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_RUNTIME_S` | `60` | Wall-clock budget for one owner evaluation; exceeding it raises `422 owner_limit_exceeded`. |
 
 ---
 
@@ -662,8 +689,14 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/datasets/{name}` | One dataset's manifest summary. |
 | `POST` | `/v1/datasets/ingest` | `{dataset, strategy?, max_tokens?, embed?, …}` → ingest a corpus into an index profile. |
 | `POST` | `/v1/evaluations` | `{dataset, profile_id, mode, query_mode?, candidate_depth?, top_k, k_values?, rerank?, rerank_candidates?, …}` → run and persist an evaluation. |
-| `GET` | `/v1/owner/capabilities` | Owner-only: the enforced evaluation bounds (never the token). |
-| `POST` | `/v1/owner/evaluations` | `{dataset?, query_mode?, max_queries?, candidate_depth?, top_k?, label?}` → a small, server-bounded BM25 evaluation over an allowed bundled dataset. Requires `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true` and a constant-time-verified `X-Owner-Token`. |
+| `GET` | `/v1/owner/capabilities` | Owner-only: the enforced evaluation bounds (requires a valid owner session). |
+| `POST` | `/v1/owner/evaluations` | `{dataset?, query_mode?, max_queries?, candidate_depth?, top_k?, label?}` → a small, server-bounded BM25 evaluation over an allowed bundled dataset. Requires `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true` and a valid owner **session** (bearer) issued by a verified passkey assertion. |
+| `POST` | `/v1/owner/webauthn/register/options` | One-time bootstrap: begin passkey registration. Requires bootstrap enabled and the `X-Bootstrap-Token` secret. |
+| `POST` | `/v1/owner/webauthn/register/verify` | One-time bootstrap: verify a registration and return the public credential record to persist. |
+| `POST` | `/v1/owner/webauthn/login/options` | Begin passkey authentication with fresh, single-use options. |
+| `POST` | `/v1/owner/webauthn/login/verify` | Verify an assertion and issue a short-lived owner session (bearer). |
+| `GET` | `/v1/owner/webauthn/session` | The caller's **own** owner-authentication status (never another visitor's). |
+| `POST` | `/v1/owner/webauthn/logout` | Revoke the caller's own owner session (idempotent). |
 | `GET` | `/v1/experiments?dataset=&include_recorded=` | List live and recorded experiments. |
 | `GET` | `/v1/experiments/{id}` | Full experiment record with per-query outcomes and traces. |
 | `GET` | `/v1/experiments/{id}/queries/{query_id}` | One query's metrics, diagnostics and ranked trace. |
@@ -701,15 +734,19 @@ for capacity assumptions outside their bounds. `POST /v1/scaling/capacity` is
 **not** gated by read-only mode: it computes arithmetic and mutates nothing.
 
 The owner endpoints are a separate authorization boundary and add
-`401 owner_unauthorized` (missing or wrong `X-Owner-Token`, or no token
-configured), `403 owner_evaluations_disabled` (the feature is off), and
+`401 owner_unauthorized` (missing, expired or invalid owner session),
+`403 owner_evaluations_disabled` (the kill switch is off), and
 `422 owner_limit_exceeded` (a request above the configured query/depth/top-k cap
-or a dataset outside the allowlist). They work on an otherwise read-only
-deployment for an authenticated owner only; the public `/v1/evaluations`,
-`/v1/datasets/ingest` and ingestion endpoints remain `403` for anonymous callers.
-Every owner evaluation is BM25-only over a bounded trusted fixture; the
-authorization and bounds are enforced in FastAPI, independently of any frontend
-state.
+or a dataset outside the allowlist). The passkey endpoints add
+`403 webauthn_not_configured` (no relying party or credential),
+`403 bootstrap_disabled` (bootstrap off or a wrong bootstrap secret),
+`400 webauthn_verification_failed` (a rejected assertion/registration) and
+`429 authentication_throttled` (too many attempts). They work on an otherwise
+read-only deployment for an authenticated owner only; the public
+`/v1/evaluations`, `/v1/datasets/ingest` and ingestion endpoints remain `403` for
+anonymous callers. Every owner evaluation is BM25-only over a bounded trusted
+fixture; the authorization and bounds are enforced in FastAPI, independently of
+any frontend state.
 
 `POST /v1/answer` is deliberately layered: `candidate_depth` controls the
 first-stage retrieval pool, `max_evidence` controls how many passages reach the
@@ -805,10 +842,12 @@ real RRF implementation:
   permission); the server-side owner policy (default clamping to the bounds, BM25
   forcing, dataset allowlist, and rejection of over-limit queries / depth / top-k
   and a second concurrent job); owner authorization (feature disabled → `403`,
-  missing or wrong `X-Owner-Token` → `401`, enabled-without-a-token → `401`); a
-  bounded owner evaluation running **real** BM25 over the bundled fixture on an
+  no session → `401`); passkey authentication (bootstrap required to register,
+  single-use challenge replay rejected, a wrong origin rejected, logout revokes);
+  a bounded owner evaluation running **real** BM25 over the bundled fixture on an
   otherwise read-only deployment; and that no request — including refused
-  mutations — mutates the deployment's permissions or leaks the owner token.
+  mutations — mutates the deployment's permissions or leaks the bootstrap secret,
+  public key or session token.
 - **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
   profile for the sample contract and returns the expected top clause.
 - **Reranker (opt-in, `-m reranker`):** the real
@@ -1348,6 +1387,109 @@ endpoints** (`docs/scaling_to_10m.md` §8.2), not RAG generation throughput.
   `psutil`, process RSS is reported as not measured and never inferred from the heap.
 - Dense, hybrid and reranked scaling were **not** measured (they need the optional
   `dense` extra and local model weights).
+
+---
+
+## 18. Owner Mode authentication (WebAuthn / passkey)
+
+The hosted app is **read-only for everyone**. The only exception is a small,
+server-bounded BM25 evaluation an operator may run as the *owner* — and that
+boundary is unlocked with a **WebAuthn passkey**, not a shared secret. This
+replaced an earlier scheme that compared a manually entered `X-Owner-Token`; a
+per-visitor passkey is stronger because the private key never leaves the device
+and there is no repository-adjacent secret to copy.
+
+### How it works
+
+- **Two ceremonies.** Registration (create) and authentication (get) are the
+  standard WebAuthn ceremonies. The browser performs them with trusted same-page
+  JavaScript via Streamlit's `st.components.v2` (no cross-origin iframe, which
+  WebAuthn would reject); only the **authenticator response** crosses the bridge
+  back to Python. The Streamlit Python process then forwards it to the in-process
+  FastAPI backend over ordinary HTTP, exactly like every other request. The
+  backend-issued session bearer stays on the Python side and is **never exposed to
+  page JavaScript**.
+- **The server verifies, never the frontend.** The maintained `webauthn`
+  (py_webauthn) library checks the CBOR attestation object, the COSE public key
+  and the ECDSA signature against a **single-use, cryptographically random**,
+  time-limited challenge. Knowledge of a public key or credential ID is never
+  treated as proof of ownership — only a valid signature is.
+- **User verification is required** (fingerprint / face / PIN), not merely user
+  presence. Keys registered for a different relying-party ID or a non-configured
+  origin are rejected, so a `localhost` passkey cannot unlock the hosted app.
+- **Sessions are server-side.** A verified assertion issues an opaque bearer with
+  a sliding idle timeout (default 15 min) and an absolute lifetime (default 8 h).
+  Every privileged request re-validates it; a refreshed page, another browser or a
+  frontend boolean never inherits owner permission. Restarting the backend
+  invalidates all sessions (they are process-local).
+- **Fail closed.** With no relying party configured, no credential registered, or
+  bootstrap disabled, Owner Mode simply cannot unlock and explains why.
+
+### One-time enrollment
+
+1. Set the relying-party identity (the app's real hostname) and origin:
+
+   ```toml
+   RAG_WORKBENCH_WEBAUTHN_RP_ID = "<app-host>"            # e.g. my-app.streamlit.app
+   RAG_WORKBENCH_WEBAUTHN_ORIGINS = '["https://<app-host>"]'
+   ```
+
+2. Enable a temporary bootstrap and its secret:
+
+   ```toml
+   RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED = "true"
+   RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN = "<a long random secret>"
+   ```
+
+3. In the sidebar, open **Owner Mode**, enter the bootstrap secret and click
+   **Begin enrollment**, then **Register passkey** (this prompts Windows Hello /
+   Touch ID / a security key). The app verifies the registration and shows the
+   **public** credential record as JSON.
+4. Paste that record into the deployment as a one-item array and turn bootstrap
+   off:
+
+   ```toml
+   RAG_WORKBENCH_WEBAUTHN_CREDENTIALS = '<the JSON shown after enrollment>'
+   RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED = "false"
+   # remove RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN
+   ```
+
+   A secrets change restarts the app, so the new credential is loaded fresh.
+5. Open **Owner Mode** again and click **Unlock with passkey**. To run a bounded
+   evaluation, also set `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"`; the
+   Evaluation Lab then shows the owner testing panel for the signed-in owner.
+
+### Recovery
+
+If the passkey is lost, repeat the bootstrap in step 2, register a replacement,
+update `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` and disable bootstrap again.
+Registration is refused unless the bootstrap secret is presented, and attempts are
+rate-limited (default 5 per 5 minutes; auth attempts 20 per window), so the empty
+credential store cannot be claimed by an arbitrary visitor.
+
+### Local development
+
+Local development needs **no** passkey and no cloud authentication: the
+Laboratory Controls session toggles and the ordinary evaluation/ingestion APIs
+work as before. Owner Mode is only meaningful on a hosted, read-only deployment;
+locally you can either skip it or register a `localhost` passkey
+(`RAG_WORKBENCH_WEBAUTHN_RP_ID=localhost`,
+`RAG_WORKBENCH_WEBAUTHN_ORIGINS=["http://localhost:8501"]`) for testing.
+
+### Provenance and limitations
+
+- Passkey cryptography is provided by py_webauthn (`documented`; the library is
+  maintained and audited). The ceremony and session logic in this project is
+  covered by deterministic offline tests that drive a **software authenticator**
+  through real COSE/CBOR/ECDSA verification (`measured here` — but a software
+  authenticator only; no hardware key was exercised in CI).
+- Signature counters are recorded when present but not enforced as a clone
+  signal; many platform authenticators report a constant `0` (`documented`).
+- Sessions are **process-local in memory**; there is no shared/distributed session
+  store. This single-process deployment does not need one (`assumed` for a
+  multi-replica deployment, which is out of scope).
+- WebAuthn requires a secure context: **HTTPS** (the Cloud app) or `localhost`
+  (`documented`). A browser without WebAuthn gets a clear message, not a crash.
 
 ---
 

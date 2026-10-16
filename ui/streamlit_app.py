@@ -24,6 +24,7 @@ import streamlit as st
 _backend = importlib.import_module("local_backend")
 resolve_api_url = _backend.resolve_api_url
 seed_sample_if_empty = _backend.seed_sample_if_empty
+_owner = importlib.import_module("owner_passkey")
 
 
 def server_is_read_only(api_url: str) -> bool:
@@ -175,10 +176,17 @@ def render_laboratory_controls(cfg: dict) -> None:
         )
         owner = laboratory.get("owner_evaluation", {})
         if owner:
+            passkey = (cfg.get("passkey") or {}) if isinstance(cfg, dict) else {}
+            if not passkey.get("authentication_available"):
+                note = "passkey sign-in not configured"
+            elif not passkey.get("credential_configured"):
+                note = "no passkey registered yet"
+            else:
+                note = "sign in under Owner Mode"
             st.caption(
                 "Owner evaluations: "
                 + ("permitted" if owner.get("permitted") else "not permitted")
-                + (" (available)" if owner.get("available") else "")
+                + f" — {note}"
             )
 
 
@@ -859,10 +867,12 @@ def _render_deployment_diagnostics() -> None:
 def _render_owner_panel() -> None:
     """Authenticated, server-bounded evaluation for the deployment owner.
 
-    Appears only when the backend explicitly permits hosted owner evaluations. The
-    token is entered per session, sent only as an ``X-Owner-Token`` header and
-    never stored in the URL, diagnostics or a log. The backend re-authorizes every
-    request and enforces the bounds; this panel merely calls the endpoint.
+    Appears only when the backend explicitly permits hosted owner evaluations and
+    this browser session holds a valid owner session. The session token is issued
+    only after a verified passkey assertion, is sent solely as an ``Authorization``
+    header and is never stored in the URL, diagnostics or a log. The backend
+    re-authorizes every request and enforces the bounds; this panel merely calls
+    the endpoint.
     """
 
     status, cfg = api_get("/v1/config")
@@ -871,17 +881,20 @@ def _render_owner_panel() -> None:
     owner = ((cfg.get("laboratory") or {}).get("owner_evaluation")) or {}
     if not owner.get("permitted"):
         return
+    session = st.session_state.get("owner_session") or {}
+    token = st.session_state.get("owner_session_token") or ""
+    if not isinstance(session, dict) or not session.get("authenticated") or not token:
+        return
     policy = cfg.get("owner_evaluation_policy") or {}
     allowed = policy.get("allowed_datasets") or []
     max_queries = int(policy.get("max_queries", 20))
     with st.expander("Owner testing (bounded, authenticated)"):
         st.caption(
-            "Optional authenticated evaluation for the deployment owner. Bounds are "
+            "Optional authenticated evaluation for the signed-in owner. Bounds are "
             f"enforced by the backend: BM25 only, datasets {', '.join(allowed) or '—'}, "
             f"max {max_queries} queries, candidate depth "
             f"{policy.get('max_candidate_depth')}, {policy.get('max_runtime_s')}s budget."
         )
-        token = st.text_input("Owner test token", type="password", key="lab_owner_token")
         dataset = st.selectbox(
             "Bundled dataset",
             allowed or ["legal-contracts"],
@@ -891,19 +904,16 @@ def _render_owner_panel() -> None:
             "Max queries", 1, max_queries, min(5, max_queries), key="lab_owner_queries"
         )
         if st.button("Run bounded owner evaluation", key="lab_owner_run"):
-            if not token.strip():
-                st.error("Enter the owner test token configured for this deployment.")
+            result_status, body = api_post(
+                "/v1/owner/evaluations",
+                headers={"Authorization": f"Bearer {token}"},
+                json={"dataset": dataset, "max_queries": int(queries)},
+            )
+            if result_status == 200 and isinstance(body, dict):
+                st.success(f"Owner evaluation {body.get('experiment_id')}")
+                _render_experiment_detail(body)
             else:
-                result_status, body = api_post(
-                    "/v1/owner/evaluations",
-                    headers={"X-Owner-Token": token},
-                    json={"dataset": dataset, "max_queries": int(queries)},
-                )
-                if result_status == 200 and isinstance(body, dict):
-                    st.success(f"Owner evaluation {body.get('experiment_id')}")
-                    _render_experiment_detail(body)
-                else:
-                    st.error(f"Owner evaluation failed ({result_status}): {body}")
+                st.error(f"Owner evaluation failed ({result_status}): {body}")
 
 
 def render_evaluation_lab() -> None:
@@ -1846,6 +1856,7 @@ def main() -> None:
     if seed_note:
         st.sidebar.caption(seed_note)
     render_laboratory_controls(config)
+    st.session_state["owner_session"] = _owner.render_owner_mode(API_URL, config)
 
     laboratory = (config.get("laboratory") or {}) if config else {}
     LAB_EVAL_ENABLED = bool(
