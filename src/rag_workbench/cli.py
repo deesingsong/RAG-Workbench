@@ -1137,6 +1137,10 @@ def _cmd_scaling(settings: Settings, args: argparse.Namespace) -> int:
     # Benchmarking emits one INFO line per ingested document; that is useful in
     # normal use but drowns a benchmark's own output. Quiet only that logger.
     logging.getLogger("rag_workbench.ingestion.pipeline").setLevel(logging.WARNING)
+    # The load-test client logs one INFO line per HTTP request via httpx/httpcore,
+    # which would bury the one-line summary under thousands of lines.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
     if command == "corpus":
         config = CorpusConfig(

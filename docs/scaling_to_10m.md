@@ -127,7 +127,9 @@ dominates chunk count.**
 
 These are **illustrative linear extrapolations of a measured single-node trend**,
 not predictions about a real deployment. They exist to show why the prototype must
-be re-architected rather than resized.
+be re-architected rather than resized. The largest configuration actually executed
+is **5,000 documents / 90,470 chunks** (`measured here`); every figure below that
+is a model or an extrapolation, never a run.
 
 Assume the "typical" shape of **10 documents × 10 chunks = 100M chunks**.
 
@@ -267,6 +269,34 @@ adapter-level changes, not rewrites of the domain logic.
    partial-result reporting.
 6. **Scale reranking and (optionally) generation** as bounded pools.
 
+### 7.3 Lifecycle: deletes, model migrations, index swaps and rollout
+
+These are the parts of scaling that are not about throughput but about not losing
+or leaking data. The prototype has simple versions of some of them; the rest are
+new work.
+
+- **Access control before retrieval.** In a multi-tenant system, tenant/source
+  filters must be applied *inside* the retriever, not after fusion — otherwise a
+  passage from another tenant can enter the candidate list before filtering. The
+  prototype is single-user and has no such boundary.
+- **Delete propagation.** A delete must remove the relational rows, the lexical
+  document and the vector points, and must be idempotent across retries and index
+  swaps. The prototype already removes the FTS entries alongside the rows
+  (`measured here`); the distributed version needs the same guarantee per store,
+  plus reconciliation for partial failures.
+- **Embedding model version migrations.** Changing the embedding model invalidates
+  every vector. The index profile already carries an embedding identity and
+  dimension, so a migration means building a **new index beside the old**, switching
+  reads atomically to a new `profile_id`, then retiring the old index. Vectors from
+  two models must never share one index.
+- **Index swaps and rollback.** Lexical and vector rebuilds are built beside the
+  live index and swapped by flipping an alias, with rollback to the previous alias
+  on error. This makes a reindex a *capacity* event (see the reindex working set in
+  §6.1) rather than an outage.
+- **Rollout.** Each adapter substitution (PostgreSQL, a distributed lexical engine,
+  a Qdrant server, a queue) can be introduced behind the existing interfaces and
+  validated with the Phase-4 evaluation platform before traffic is moved.
+
 ---
 
 ## 8. Failure modes and operational concerns
@@ -286,6 +316,28 @@ adapter-level changes, not rewrites of the domain logic.
   Partial results must be reported, never silently hidden.
 - **Multi-tenant isolation.** Filters, quotas and per-tenant indexes are new
   concerns the single-user prototype does not model.
+
+### 8.1 Observability and SLOs
+
+The prototype reports per-request `timings_ms` and writes structured logs. A
+scaled system needs standing metrics and explicit objectives. **No target below is
+asserted** — each is a candidate SLI whose SLO must be set by the product, then
+measured on production hardware.
+
+| Signal | Why it matters | Basis |
+|---|---|---|
+| Ingestion throughput (docs/s, chunks/s) | Sizing the worker pool; the model's bottleneck input | measured here (prototype), unknown (target) |
+| Queue depth and age | Backlog vs freshness before it reaches users | not measured (no queue) |
+| Index freshness (ingest → searchable lag) | The visible effect of asynchronous ingestion | not measured |
+| Retrieval latency p50/p95/p99 **per stage** | Tail latency is additive across fan-out and rerank | measured here at small scale |
+| Recall@K / nDCG from the evaluation platform | A faster system that retrieves worse is not an improvement | measured (Phase 4 datasets) |
+| Index size per store | Directly drives the §6 capacity total | measured here + documented ratios |
+| Error rate (parse failures, poison docs, timeouts) | Distinguishes load problems from data problems | measured here (0 errors at small scale) |
+| Cost per 1k queries / per 1M chunks | Ties engineering choices to the bill | unknown |
+
+The evaluation platform (Phase 4) is the reusable piece here: it already turns a
+corpus and a query set into reproducible retrieval metrics, so the same harness can
+compare engines *before* a migration is trusted.
 
 ---
 
