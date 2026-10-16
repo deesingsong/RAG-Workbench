@@ -98,3 +98,35 @@ metrics and their honest interpretation, including the preserved `aq-007` failur
 `--seed` fixes sampling so a repeated configuration is reproducible; omit it for
 normal sampling. Add `--no-demos` to record only the aggregate report when sweeping
 configurations.
+
+## Recorded scaling baselines (`recorded_scaling/`)
+
+The sibling directory `benchmarks/recorded_scaling/` holds **Phase-6 scalability
+artifacts**: bounded, single-machine measurements of indexing and BM25 retrieval
+cost at several corpus sizes over a deterministic synthetic corpus. They are
+produced by:
+
+```powershell
+uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --record
+```
+
+Each `scale-*.json` file records the corpus configuration and fingerprint, the
+execution environment (Python, platform, CPU, package versions), and one workload
+block per corpus size with ingestion throughput, on-disk footprint (SQLite file,
+FTS5 shadow-table bytes and source bytes), BM25 latency percentiles by candidate
+depth, and a memory probe. Memory is a `tracemalloc` Python-heap peak unless
+`psutil` is installed (`uv run --with psutil ...`), in which case process RSS is
+recorded and labelled as such.
+
+Every artifact carries `source="recorded"` and a `limitations` list, so the
+read-only deployment shows real measurements without presenting them as a
+production throughput claim. The directory holds more than one artifact on
+purpose: the primary `paragraph`/220 baseline and a `fixed_token`/512 run
+demonstrate that **chunking strategy, not the token budget, dominates chunk
+count**. See [`docs/scaling_to_10m.md`](../docs/scaling_to_10m.md) and
+[`docs/case_studies.md`](../docs/case_studies.md) for the interpretation.
+
+`load/` holds an **optional** Locust definition that exercises the read-only API
+endpoints. Locust is not a project dependency; run it through
+`uv run --with locust locust -f benchmarks/load/locustfile.py --host http://127.0.0.1:8765`.
+The built-in `rag-workbench scaling load-test` harness needs no extra install.

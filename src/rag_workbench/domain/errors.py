@@ -142,3 +142,15 @@ class AnswerNotFoundError(NotFoundError):
     """A recorded answer demonstration does not exist."""
 
     code = "answer_not_found"
+
+
+class ScalingError(RagWorkbenchError):
+    """A scalability benchmark, capacity calculation or artifact is invalid."""
+
+    code = "scaling_error"
+
+
+class ScalingBenchmarkNotFoundError(NotFoundError):
+    """A recorded scalability benchmark does not exist."""
+
+    code = "scaling_benchmark_not_found"

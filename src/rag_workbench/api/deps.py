@@ -17,6 +17,7 @@ from rag_workbench.ingestion.pipeline import IngestionService
 from rag_workbench.ingestion.vector_index import VectorIndexer
 from rag_workbench.persistence.database import Database
 from rag_workbench.retrieval.service import SearchService
+from rag_workbench.scaling.service import ScalingService
 
 
 def get_settings(request: Request) -> Settings:
@@ -58,6 +59,10 @@ def get_vector_indexer(request: Request) -> VectorIndexer:
 
 def get_answer_service(request: Request) -> AnswerService:
     return request.app.state.answer_service
+
+
+def get_scaling_service(request: Request) -> ScalingService:
+    return request.app.state.scaling_service
 
 
 def require_generation(settings: Settings = Depends(get_settings)) -> None:

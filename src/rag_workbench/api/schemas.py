@@ -303,6 +303,10 @@ class AppConfigResponse(BaseModel):
     recorded_answer_demos: int = 0
     recorded_answers_dir: str = ""
     recorded_answers_exists: bool = False
+    recorded_scaling_benchmarks: int = 0
+    recorded_scaling_dir: str = ""
+    recorded_scaling_exists: bool = False
+    scaling_max_documents: int = 0
 
 
 __all__ = [

@@ -1,0 +1,397 @@
+{
+  "schema_version": "1",
+  "benchmark_id": "scale-20261016T092334",
+  "created_at": "2026-10-16T09:23:34.120840+00:00",
+  "git_commit": "5c22ef621184d0b6b2f88ebf0d0b3b5f82958a78",
+  "source": "recorded",
+  "environment": {
+    "python": "3.13.5",
+    "implementation": "CPython",
+    "platform": "Windows-11-10.0.26300-SP0",
+    "machine": "AMD64",
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "cpu_count": 16,
+    "packages": {
+      "rag-workbench": "0.1.0",
+      "torch": "2.14.1",
+      "sentence-transformers": "6.1.0",
+      "transformers": "5.19.0",
+      "qdrant-client": "1.19.1",
+      "sqlalchemy": "2.1.4",
+      "numpy": "2.5.4"
+    }
+  },
+  "hardware": {
+    "cpu_count": 16,
+    "processor": "AMD64 Family 25 Model 68 Stepping 1, AuthenticAMD",
+    "machine": "AMD64",
+    "platform": "Windows-11-10.0.26300-SP0"
+  },
+  "corpus": {
+    "config": {
+      "documents": 5000,
+      "seed": 0,
+      "paragraphs_per_section": 2,
+      "words_per_paragraph": 55,
+      "distinctive_terms": 6,
+      "id_prefix": "syn"
+    },
+    "documents": 5000,
+    "fingerprint": "5f927b68f4376f397d53fccd6867ebfcc0af4b0f40e74f709da91a796e8b1467",
+    "size_classes": {
+      "short": 1440,
+      "typical": 2542,
+      "large": 1018
+    }
+  },
+  "config": {
+    "strategy": "paragraph",
+    "max_tokens": 220,
+    "overlap_tokens": 40,
+    "candidate_depths": [
+      10,
+      50,
+      100
+    ],
+    "query_mode": "or",
+    "modes": [
+      "bm25"
+    ],
+    "retrieval_queries": 20
+  },
+  "workloads": [
+    {
+      "documents": 100,
+      "chunks": 687,
+      "corpus_fingerprint": "5e6848a2c7e829a2b0dbde20e7b99bf6962df9214ba9bba06820679a637593d5",
+      "ingestion": {
+        "total_ms": 2884.634,
+        "documents_per_second": 34.666,
+        "chunks_total": 687,
+        "parse_ms": {
+          "count": 100,
+          "mean": 0.525,
+          "p50": 0.413,
+          "p95": 1.144,
+          "min": 0.141,
+          "max": 2.445
+        },
+        "chunk_ms": {
+          "count": 100,
+          "mean": 2.108,
+          "p50": 1.772,
+          "p95": 6.271,
+          "min": 0.397,
+          "max": 9.718
+        },
+        "index_ms": {
+          "count": 100,
+          "mean": 4.496,
+          "p50": 3.95,
+          "p95": 8.918,
+          "min": 1.395,
+          "max": 15.114
+        },
+        "per_document_ms": {
+          "count": 100,
+          "mean": 15.419,
+          "p50": 14.45,
+          "p95": 25.018,
+          "min": 9.497,
+          "max": 38.424
+        }
+      },
+      "index": {
+        "source_bytes": 761053,
+        "db_bytes": 1888256,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 1888256,
+        "fts_bytes": 181373,
+        "total_bytes": 1888256
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 3.76,
+            "p50": 3.771,
+            "p95": 4.496,
+            "min": 2.992,
+            "max": 4.564
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 5.069,
+            "p50": 5.049,
+            "p95": 5.515,
+            "min": 4.596,
+            "max": 5.895
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 6.715,
+            "p50": 6.494,
+            "p95": 7.838,
+            "min": 6.069,
+            "max": 8.323
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": false,
+        "method": "tracemalloc",
+        "note": "psutil not installed; a Python-heap peak is recorded instead of RSS",
+        "tracemalloc_peak_mb": 2.074
+      },
+      "failures": []
+    },
+    {
+      "documents": 1000,
+      "chunks": 7774,
+      "corpus_fingerprint": "93b1bfebf2438751de7ae7c21f006f4d0e9e8c2ce3f22e4bd9f3c65a48df012e",
+      "ingestion": {
+        "total_ms": 26171.346,
+        "documents_per_second": 38.21,
+        "chunks_total": 7774,
+        "parse_ms": {
+          "count": 1000,
+          "mean": 0.489,
+          "p50": 0.409,
+          "p95": 1.177,
+          "min": 0.134,
+          "max": 1.841
+        },
+        "chunk_ms": {
+          "count": 1000,
+          "mean": 2.095,
+          "p50": 1.652,
+          "p95": 5.582,
+          "min": 0.278,
+          "max": 7.871
+        },
+        "index_ms": {
+          "count": 1000,
+          "mean": 4.406,
+          "p50": 3.748,
+          "p95": 9.51,
+          "min": 0.985,
+          "max": 24.49
+        },
+        "per_document_ms": {
+          "count": 1000,
+          "mean": 14.912,
+          "p50": 13.6,
+          "p95": 25.261,
+          "min": 7.281,
+          "max": 58.424
+        }
+      },
+      "index": {
+        "source_bytes": 8739813,
+        "db_bytes": 19681280,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 19681280,
+        "fts_bytes": 2075124,
+        "total_bytes": 19681280
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 21.395,
+            "p50": 21.076,
+            "p95": 22.847,
+            "min": 20.29,
+            "max": 23.233
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 22.86,
+            "p50": 22.851,
+            "p95": 23.568,
+            "min": 21.863,
+            "max": 23.689
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 28.687,
+            "p50": 26.346,
+            "p95": 36.634,
+            "min": 24.715,
+            "max": 44.399
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": false,
+        "method": "tracemalloc",
+        "note": "psutil not installed; a Python-heap peak is recorded instead of RSS",
+        "tracemalloc_peak_mb": 2.626
+      },
+      "failures": []
+    },
+    {
+      "documents": 5000,
+      "chunks": 38709,
+      "corpus_fingerprint": "5f927b68f4376f397d53fccd6867ebfcc0af4b0f40e74f709da91a796e8b1467",
+      "ingestion": {
+        "total_ms": 150830.4,
+        "documents_per_second": 33.15,
+        "chunks_total": 38709,
+        "parse_ms": {
+          "count": 5000,
+          "mean": 0.491,
+          "p50": 0.414,
+          "p95": 1.172,
+          "min": 0.128,
+          "max": 2.648
+        },
+        "chunk_ms": {
+          "count": 5000,
+          "mean": 2.107,
+          "p50": 1.724,
+          "p95": 5.577,
+          "min": 0.253,
+          "max": 9.533
+        },
+        "index_ms": {
+          "count": 5000,
+          "mean": 4.581,
+          "p50": 4.01,
+          "p95": 9.8,
+          "min": 0.984,
+          "max": 37.867
+        },
+        "per_document_ms": {
+          "count": 5000,
+          "mean": 17.538,
+          "p50": 15.365,
+          "p95": 30.777,
+          "min": 7.278,
+          "max": 625.457
+        }
+      },
+      "index": {
+        "source_bytes": 43461977,
+        "db_bytes": 91492352,
+        "db_wal_bytes": 0,
+        "db_page_bytes": 91492352,
+        "fts_bytes": 10340039,
+        "total_bytes": 91492352
+      },
+      "retrieval": [
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 10,
+          "top_k": 10,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 112.523,
+            "p50": 112.207,
+            "p95": 122.029,
+            "min": 105.914,
+            "max": 123.147
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 50,
+          "top_k": 50,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 104.716,
+            "p50": 102.615,
+            "p95": 116.518,
+            "min": 99.561,
+            "max": 118.019
+          },
+          "errors": 0
+        },
+        {
+          "mode": "bm25",
+          "query_mode": "or",
+          "candidate_depth": 100,
+          "top_k": 100,
+          "queries": 20,
+          "latency_ms": {
+            "count": 20,
+            "mean": 105.846,
+            "p50": 104.99,
+            "p95": 111.488,
+            "min": 100.784,
+            "max": 111.531
+          },
+          "errors": 0
+        }
+      ],
+      "memory": {
+        "available": false,
+        "method": "tracemalloc",
+        "note": "psutil not installed; a Python-heap peak is recorded instead of RSS",
+        "tracemalloc_peak_mb": 3.488
+      },
+      "failures": []
+    }
+  ],
+  "failures": [],
+  "limitations": [
+    "A single local machine measured these numbers; they are not a production throughput claim.",
+    "Working databases were written under C:\\Users\\jofar\\AppData\\Local\\Temp\\rw_scaling_9o5i7v5p and removed after the run; only aggregate measurements are kept.",
+    "The synthetic corpus is generated, so absolute retrieval quality is not meaningful here; the measurements characterise cost, not relevance.",
+    "Dense/reranker stages are only measured when their optional extras and model weights are installed."
+  ],
+  "notes": [
+    "Synthetic corpus; not representative of any specific production corpus.",
+    "Ingestion is synchronous and single-writer; timings reflect this prototype.",
+    "Latency scales with local CPU and is not extrapolated to other hardware."
+  ]
+}

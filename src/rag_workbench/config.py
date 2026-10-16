@@ -281,6 +281,18 @@ class Settings(BaseSettings):
         default_factory=lambda: find_repo_root() / "benchmarks" / "recorded_answers"
     )
 
+    # Scalability (Phase 6). The local performance harness and synthetic corpus
+    # generator are explicit, opt-in commands; nothing here runs at startup and no
+    # benchmark requires an LLM or the dense extra. `recorded_scaling_dir` holds
+    # committed, previously executed scaling artifacts for the read-only demo.
+    recorded_scaling_dir: Path = Field(
+        default_factory=lambda: find_repo_root() / "benchmarks" / "recorded_scaling"
+    )
+    scaling_work_dir_name: str = "scaling"
+    # Hard guard so an accidental scaling run cannot exhaust local storage: the
+    # harness refuses to generate/index more than this many synthetic documents.
+    scaling_max_documents: int = Field(default=20000, ge=1, le=1000000)
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_mb * 1024 * 1024

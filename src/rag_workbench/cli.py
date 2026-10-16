@@ -22,6 +22,9 @@
     rag-workbench eval show <experiment-id>
     rag-workbench eval export <experiment-id> --format csv --out run.csv
     rag-workbench eval failures <experiment-id>
+    rag-workbench scaling run --documents 100,1000,5000 --record
+    rag-workbench scaling capacity --documents 10000000 --scenario typical
+    rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed
     rag-workbench serve
 
 The CLI, the API and the tests all call the same core services; the CLI adds no
@@ -32,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -68,6 +72,18 @@ from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.vector_store import close_vector_stores
 from rag_workbench.retrieval.service import SearchService
+from rag_workbench.scaling.capacity import (
+    IngestionAssumptions,
+    StorageAssumptions,
+    estimate_ingestion,
+    estimate_storage,
+    human_bytes,
+    storage_scenarios,
+)
+from rag_workbench.scaling.corpus import CorpusConfig, generate_corpus, write_corpus
+from rag_workbench.scaling.harness import run_scaling_benchmark
+from rag_workbench.scaling.loadtest import run_load_test_sync
+from rag_workbench.scaling.service import ScalingService
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -360,6 +376,81 @@ def _build_parser() -> argparse.ArgumentParser:
     answer_record.add_argument(
         "--no-demos", action="store_true", help="write only the aggregate quality report"
     )
+
+    # ---------------------------------------------------------------- scalability
+    scaling = sub.add_parser(
+        "scaling", help="performance baselines, capacity planning and load testing"
+    )
+    scaling_sub = scaling.add_subparsers(dest="scaling_command", required=True)
+
+    scaling_corpus = scaling_sub.add_parser(
+        "corpus", help="generate a reproducible synthetic corpus to a directory"
+    )
+    scaling_corpus.add_argument("--documents", type=int, required=True)
+    scaling_corpus.add_argument("--out", type=Path, required=True)
+    scaling_corpus.add_argument("--seed", type=int, default=0)
+    scaling_corpus.add_argument("--paragraphs-per-section", type=int, default=2)
+    scaling_corpus.add_argument("--words-per-paragraph", type=int, default=55)
+
+    scaling_capacity = scaling_sub.add_parser(
+        "capacity", help="estimate storage and ingestion capacity from assumptions"
+    )
+    scaling_capacity.add_argument("--documents", type=int, default=10_000_000)
+    scaling_capacity.add_argument("--chunks-per-document", type=float, default=10.0)
+    scaling_capacity.add_argument("--embedding-dimensions", type=int, default=384)
+    scaling_capacity.add_argument("--bytes-per-dimension", type=int, default=4)
+    scaling_capacity.add_argument("--vector-indexes", type=int, default=1)
+    scaling_capacity.add_argument("--replication-factor", type=int, default=2)
+    scaling_capacity.add_argument("--documents-per-day", type=int, default=None)
+    scaling_capacity.add_argument(
+        "--embedding-chunks-per-second-per-worker", type=float, default=None
+    )
+    scaling_capacity.add_argument("--workers", type=int, default=4)
+    scaling_capacity.add_argument("--scenario", choices=["small", "typical", "large"], default=None)
+    scaling_capacity.add_argument("--json", action="store_true")
+
+    scaling_run = scaling_sub.add_parser(
+        "run", help="run bounded local indexing and retrieval benchmarks"
+    )
+    scaling_run.add_argument(
+        "--documents", default="100,1000,5000", help="comma-separated corpus sizes"
+    )
+    scaling_run.add_argument(
+        "--strategy", choices=["paragraph", "fixed_token", "clause_aware"], default="paragraph"
+    )
+    scaling_run.add_argument("--max-tokens", type=int, default=220)
+    scaling_run.add_argument("--overlap-tokens", type=int, default=40)
+    scaling_run.add_argument("--seed", type=int, default=0)
+    scaling_run.add_argument(
+        "--depths", default="10,50,100", help="comma-separated candidate depths"
+    )
+    scaling_run.add_argument("--queries", type=int, default=20)
+    scaling_run.add_argument("--modes", default="bm25", help="comma-separated retrieval modes")
+    scaling_run.add_argument("--out", type=Path, default=None, help="write the record JSON here")
+    scaling_run.add_argument(
+        "--record", action="store_true", help="write the record to benchmarks/recorded_scaling"
+    )
+    scaling_run.add_argument("--name", default=None, help="artifact filename when --record")
+    scaling_run.add_argument("--json", action="store_true")
+
+    scaling_list = scaling_sub.add_parser("list", help="list recorded scaling benchmarks")
+    scaling_list.add_argument("--json", action="store_true")
+
+    scaling_show = scaling_sub.add_parser("show", help="show one recorded scaling benchmark")
+    scaling_show.add_argument("benchmark_id")
+
+    scaling_load = scaling_sub.add_parser(
+        "load-test", help="bounded local load test against a running API"
+    )
+    scaling_load.add_argument("--url", default="http://127.0.0.1:8765")
+    scaling_load.add_argument(
+        "--workload",
+        choices=["health", "bm25_search", "experiments", "recorded_artifacts", "mixed"],
+        default="mixed",
+    )
+    scaling_load.add_argument("--users", type=int, default=4)
+    scaling_load.add_argument("--duration", type=float, default=10.0)
+    scaling_load.add_argument("--json", action="store_true")
 
     return parser
 
@@ -1040,6 +1131,164 @@ def _cmd_answer(settings: Settings, database: Database, args: argparse.Namespace
     raise RagWorkbenchError(f"unknown answer command: {command}", code="cli_error")
 
 
+def _cmd_scaling(settings: Settings, args: argparse.Namespace) -> int:
+    service = ScalingService(settings)
+    command = args.scaling_command
+    # Benchmarking emits one INFO line per ingested document; that is useful in
+    # normal use but drowns a benchmark's own output. Quiet only that logger.
+    logging.getLogger("rag_workbench.ingestion.pipeline").setLevel(logging.WARNING)
+
+    if command == "corpus":
+        config = CorpusConfig(
+            documents=args.documents,
+            seed=args.seed,
+            paragraphs_per_section=args.paragraphs_per_section,
+            words_per_paragraph=args.words_per_paragraph,
+        )
+        documents = generate_corpus(config)
+        manifest = write_corpus(documents, args.out)
+        print(f"wrote {manifest['documents']} synthetic documents to {args.out}")
+        print(f"fingerprint: {manifest['fingerprint']}")
+        print(f"size classes: {manifest['size_classes']}")
+        return 0
+
+    if command == "capacity":
+        base = StorageAssumptions(
+            documents=args.documents,
+            chunks_per_document=args.chunks_per_document,
+            embedding_dimensions=args.embedding_dimensions,
+            bytes_per_dimension=args.bytes_per_dimension,
+            vector_indexes=args.vector_indexes,
+            replication_factor=args.replication_factor,
+        )
+        if args.scenario:
+            base = storage_scenarios(base)[args.scenario]
+        estimate = estimate_storage(base)
+        payload: dict[str, object] = {"storage": estimate.model_dump(mode="json")}
+        if args.documents_per_day is not None:
+            throughput = args.embedding_chunks_per_second_per_worker or 20.0
+            ingestion = estimate_ingestion(
+                IngestionAssumptions(
+                    documents_per_day=args.documents_per_day,
+                    chunks_per_document=base.chunks_per_document,
+                    embedding_chunks_per_second_per_worker=throughput,
+                    workers=args.workers,
+                )
+            )
+            payload["ingestion"] = ingestion.model_dump(mode="json")
+        if args.json:
+            print(json.dumps(payload, indent=2))
+            return 0
+        print(
+            f"storage estimate for {base.documents:,} documents "
+            f"({base.chunks_per_document} chunks/doc)"
+        )
+        for component in estimate.components:
+            print(
+                f"  {component.label:<32} {human_bytes(component.bytes):>12}  [{component.basis}]"
+            )
+        print(f"  {'primary':<32} {human_bytes(estimate.primary_bytes):>12}")
+        print(f"  {'replicas':<32} {human_bytes(estimate.replica_bytes):>12}")
+        print(f"  {'backups':<32} {human_bytes(estimate.backup_bytes):>12}")
+        print(f"  {'reindex working set':<32} {human_bytes(estimate.reindex_bytes):>12}")
+        print(f"  {'operational headroom':<32} {human_bytes(estimate.headroom_bytes):>12}")
+        print(f"  {'TOTAL':<32} {human_bytes(estimate.total_bytes):>12}")
+        if "ingestion" in payload:
+            ing = payload["ingestion"]
+            assert isinstance(ing, dict)
+            print(
+                f"ingestion: {ing['chunks_per_day']:,.0f} chunks/day, bottleneck "
+                f"{ing['bottleneck_stage']} {ing['bottleneck_per_day']:,.0f} chunks/day, "
+                f"utilization {ing['utilization']:.2f}, keeps_up={ing['keeps_up']}"
+            )
+        return 0
+
+    if command == "run":
+        sizes = [int(part) for part in str(args.documents).split(",") if part.strip()]
+        depths = [int(part) for part in str(args.depths).split(",") if part.strip()]
+        modes = [part.strip() for part in str(args.modes).split(",") if part.strip()]
+        config = CorpusConfig(documents=max(sizes), seed=args.seed)
+        record = run_scaling_benchmark(
+            settings,
+            config=config,
+            workloads=sizes,
+            strategy=args.strategy,
+            max_tokens=args.max_tokens,
+            overlap_tokens=args.overlap_tokens,
+            candidate_depths=depths,
+            modes=modes,
+            retrieval_queries=args.queries,
+            progress=lambda message: print(message),
+        )
+        if args.out is not None:
+            args.out.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            print(f"wrote {args.out}")
+        if args.record:
+            path = service.write_artifact(record, filename=args.name)
+            print(f"recorded artifact: {path}")
+        if args.json:
+            print(json.dumps(record, indent=2))
+            return 0
+        print(f"benchmark {record['benchmark_id']} (schema {record['schema_version']})")
+        for workload in record["workloads"]:
+            ingestion = workload["ingestion"]
+            index = workload["index"]
+            print(
+                f"  {workload['documents']:>6} docs  {workload['chunks']:>7} chunks  "
+                f"{ingestion['documents_per_second']:.1f} docs/s  "
+                f"db={human_bytes(index['db_bytes'])}  fts={human_bytes(index['fts_bytes'])}"
+            )
+            for retrieval in workload["retrieval"]:
+                stats = retrieval["latency_ms"]
+                print(
+                    f"      {retrieval['mode']}@{retrieval['candidate_depth']}: "
+                    f"p50={stats['p50']}ms p95={stats['p95']}ms errors={retrieval['errors']}"
+                )
+        for failure in record["failures"]:
+            print(f"  ! {failure}")
+        return 0
+
+    if command == "list":
+        benchmarks = service.list_benchmarks()
+        if args.json:
+            print(json.dumps(benchmarks, indent=2))
+            return 0
+        if not benchmarks:
+            print("no recorded scaling benchmarks", file=sys.stderr)
+            return 0
+        for item in benchmarks:
+            marker = " [INVALID]" if item.get("invalid") else ""
+            print(
+                f"  {item['benchmark_id']}{marker} workloads={item['workload_count']} "
+                f"docs_max={item['documents_max']} "
+                f"modes={','.join(item.get('modes') or [])} created={item.get('created_at')}"
+            )
+        return 0
+
+    if command == "show":
+        print(json.dumps(service.get_benchmark(args.benchmark_id), indent=2))
+        return 0
+
+    if command == "load-test":
+        result = run_load_test_sync(
+            args.url, workload=args.workload, users=args.users, duration_s=args.duration
+        )
+        if args.json:
+            print(json.dumps(result, indent=2))
+            return 0
+        print(f"load test '{result['workload']}' against {result['base_url']}")
+        print(
+            f"  users={result['concurrent_users']} duration={result['duration_s']}s "
+            f"requests={result['requests']} rps={result['requests_per_second']} "
+            f"errors={result['errors']} error_rate={result['error_rate']}"
+        )
+        latency = result["latency_ms"]
+        print(f"  latency ms: p50={latency['p50']} p95={latency['p95']} mean={latency['mean']}")
+        return 0
+
+    raise RagWorkbenchError(f"unknown scaling command: {command}", code="cli_error")
+
+
 def _cmd_serve(settings: Settings, args: argparse.Namespace) -> int:
     import uvicorn
 
@@ -1063,6 +1312,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "serve":
             return _cmd_serve(settings, args)
+
+        if args.command == "scaling":
+            # Scalability commands use their own isolated databases (or none at
+            # all) and must not create the default database as a side effect.
+            return _cmd_scaling(settings, args)
 
         database = Database(settings.resolved_database_url)
         database.create_schema()

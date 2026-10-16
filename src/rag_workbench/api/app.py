@@ -21,6 +21,7 @@ from rag_workbench.api.routes import (
     documents,
     evaluation,
     health,
+    scaling,
     search,
     vectors,
 )
@@ -41,6 +42,7 @@ from rag_workbench.domain.errors import (
     ReadOnlyModeError,
     RerankError,
     RerankerUnavailableError,
+    ScalingError,
     SearchError,
     UnsupportedFileTypeError,
     ValidationError,
@@ -54,6 +56,7 @@ from rag_workbench.logging_config import configure_logging
 from rag_workbench.persistence.database import Database
 from rag_workbench.persistence.vector_store import close_vector_stores
 from rag_workbench.retrieval.service import SearchService
+from rag_workbench.scaling.service import ScalingService
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,7 @@ _STATUS_BY_ERROR: dict[type[RagWorkbenchError], int] = {
     RerankError: 400,
     DatasetError: 400,
     EvaluationError: 400,
+    ScalingError: 400,
     ReadOnlyModeError: 403,
     GenerationError: 400,
     GeneratorUnavailableError: 503,
@@ -118,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.answer_service = AnswerService(
         database, settings, app.state.search_service
     )
+    app.state.scaling_service = ScalingService(settings)
 
     @app.exception_handler(RagWorkbenchError)
     async def _handle_workbench_error(_request: Request, exc: RagWorkbenchError) -> JSONResponse:
@@ -150,6 +155,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(vectors.router, prefix="/v1")
     app.include_router(evaluation.router, prefix="/v1")
     app.include_router(answer.router, prefix="/v1")
+    app.include_router(scaling.router, prefix="/v1")
     return app
 
 

@@ -8,19 +8,32 @@ against the source.
 
 This is an engineering research platform, not a "chat with your PDFs" clone. In
 this repository there is **no LLM, no API key, no GPU and no Docker requirement**
-for anything documented below.
+for anything documented below. The only optional components are local models:
+Sentence Transformers (dense/rerank) and a separately installed Ollama
+(grounded answers).
 
-> **Status: Phases 0–3 complete.**
-> Implemented: project foundation, ingestion (TXT / Markdown / text PDF),
-> deterministic chunking (`fixed_token`, `paragraph`, **`clause_aware`**), SQLite
-> metadata + FTS5 indexing, BM25 search, local **Sentence Transformers
-> embeddings**, a **Qdrant-local vector index**, **dense search**, **RRF hybrid
-> search**, vector index status / rebuild / reconciliation, optional local
-> **cross-encoder reranking**, a FastAPI backend, a CLI and a thin Streamlit
-> client.
-> **Not implemented yet (later phases):** evaluation metrics, the RAG failure
-> explorer, and optional Ollama answer generation. Nothing in this README claims
-> those exist.
+**Portfolio arc.** The project is built in reviewed phases, each a study in a
+different part of retrieval engineering: a working BM25 vertical slice (Phases
+0–1), dense + hybrid retrieval (Phase 2), clause-aware chunking and cross-encoder
+reranking (Phase 3), a reproducible evaluation and failure-analysis platform
+(Phase 4), evidence-grounded answers with deterministic citation verification
+(Phase 5), and a measured scalability case study for ~10 million documents
+(Phase 6).
+
+> **Status: Phases 0–6 complete.**
+> Implemented: ingestion (TXT / Markdown / text PDF), deterministic chunking
+> (`fixed_token`, `paragraph`, **`clause_aware`**), SQLite metadata + FTS5
+> indexing, BM25 search, local **Sentence Transformers** embeddings, a
+> **Qdrant-local vector index**, **dense** and **RRF hybrid** search, vector index
+> status / rebuild / reconciliation, optional local **cross-encoder reranking**,
+> a retrieval **evaluation** platform (SciFact + a synthetic legal set) with
+> failure diagnostics and committed artifacts, optional **Ollama grounded
+> answers** with deterministic citation verification and an answer-quality audit,
+> and a **scalability case study**: a bounded performance harness, a
+> deterministic capacity model, recorded baselines and a documented design for
+> ~10M documents. A FastAPI backend, a CLI and a thin Streamlit client sit on top.
+> Nothing in this README claims a capability that was not implemented and tested;
+> measured results are labelled as such.
 
 ---
 
@@ -79,6 +92,14 @@ for anything documented below.
   Generation is refused in read-only mode and when it is disabled, so the public
   demo — which serves **recorded** answer runs and a grounded-answer quality
   report — never becomes a model endpoint.
+- **Scalability engineering** (Phase 6): a bounded, reproducible **performance
+  harness** over a deterministic synthetic corpus (ingestion throughput, on-disk
+  footprint and BM25 latency by corpus size), a **deterministic capacity model**
+  that labels every line with its basis (`exact` / `measured` / `documented` /
+  `unknown`), a **lightweight local load-testing harness** (with an optional
+  Locust definition), committed scaling baselines, and a **design for ~10 million
+  documents** that preserves the retrieval interfaces. The prototype does **not**
+  serve 10M documents; the design is explicitly a plan.
 - **FastAPI** endpoints with typed Pydantic contracts and OpenAPI docs, a
   **CLI**, and a **Streamlit** client that talks to the API over HTTP only.
 
@@ -99,7 +120,10 @@ downloads the reranker model once on first use (about 90 MB). **Answer generatio
 (Phase 5) is optional and needs a **separately installed local Ollama** with one
 model pulled or imported; with no Ollama the rest of the project is unaffected.
 The core install, the tests and the default demo need no Docker, cloud account,
-API key or GPU.
+API key or GPU. The **Phase 6 scalability tools** (synthetic corpus generator,
+performance harness, capacity model and built-in load-test harness) are part of the
+core install; only the optional Locust definition and the `psutil` memory probe are
+run with `uv run --with ...`.
 
 ---
 
@@ -292,6 +316,48 @@ question plus one `answer_quality` report per configuration. All carry
 The instruction wording is selectable with `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT`
 (`v1` default, `v2` for the audited alternative — see §16). A fixed `--seed` makes
 a repeated request reproducible; leaving it unset samples normally.
+
+### Scalability and load testing from the CLI (Phase 6)
+
+```powershell
+# Generate a reproducible synthetic corpus to inspect on disk
+uv run rag-workbench scaling corpus --documents 500 --out data\scaling-corpus
+
+# Run bounded indexing + BM25 benchmarks and record committed artifacts.
+# No extra install: BM25 uses only the core dependencies.
+uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --record
+
+# Compare chunking strategies on the same corpus
+uv run rag-workbench scaling run --documents 1000,5000 --strategy fixed_token `
+  --max-tokens 512 --overlap-tokens 64 --record
+
+# Capacity model for ~10M documents (storage + optional ingestion projection)
+uv run rag-workbench scaling capacity --documents 10000000 --scenario typical
+uv run rag-workbench scaling capacity --documents 10000000 --scenario typical `
+  --documents-per-day 100000 --embedding-chunks-per-second-per-worker 20 --workers 4
+
+# Inspect recorded baselines with no API or model running
+uv run rag-workbench scaling list
+uv run rag-workbench scaling show <benchmark-id>
+
+# Bounded load test against a LOCAL server (never the public demo)
+uv run rag-workbench serve            # in another terminal
+uv run rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed --users 4 --duration 10
+```
+
+`scaling run` refuses to index more than `RAG_WORKBENCH_SCALING_MAX_DOCUMENTS`
+documents (default 20,000), so an accidental run cannot exhaust local storage.
+`rag-workbench scaling load-test` uses only `httpx`; for richer reporting the same
+read-only workloads are available through the optional Locust definition:
+
+```powershell
+uv run --with locust locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
+```
+
+Locust and `psutil` (for RSS memory instead of a Python-heap peak) are **not**
+project dependencies; both are run with `uv run --with ...` so the core install
+stays zero-mandatory-cost. See [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md)
+and [`docs/case_studies.md`](docs/case_studies.md).
 
 ### Try a PDF
 
@@ -556,6 +622,11 @@ database keeps every document, chunk and profile (covered by tests).
 | `GET` | `/v1/answer-demos/{id}` | One recorded answer demonstration. |
 | `GET` | `/v1/answer-quality` | The newest recorded grounded-answer quality report. |
 | `GET` | `/v1/answer-quality-reports` | Every recorded quality report (summary), newest first, for configuration comparison. |
+| `GET` | `/v1/scaling-benchmarks` | List recorded scalability benchmarks (summary), newest first. |
+| `GET` | `/v1/scaling-benchmarks/{id}` | Full recorded scaling benchmark: environment, corpus, per-size workloads and latencies. |
+| `GET` | `/v1/scaling/scenarios` | The three documented storage scenarios (small / typical / large). |
+| `POST` | `/v1/scaling/capacity` | `{storage?, ingestion?}` → deterministic storage and ingestion estimates. Pure arithmetic; works in read-only mode. |
+| `GET` | `/v1/scaling/architecture` | Current-vs-proposed architecture data used by the Scalability Laboratory and `docs/scaling_to_10m.md`. |
 
 `mode` accepts `bm25`, `dense` and `hybrid`. `query_mode` accepts `and` (the
 interactive default, every term must appear) and `or` (any term; BM25 ranks,
@@ -571,6 +642,12 @@ unavailable (`dense_unavailable`, `vector_index_not_built`,
 Ollama/the model is unreachable), and `400 generation_error` for a generation
 that ran but produced no usable structured answer. Body shape:
 `{"error": "<code>", "message": "<text>"}`.
+
+The scalability endpoints add `404 scaling_benchmark_not_found` for a missing
+recorded artifact, `400 scaling_error` for an invalid benchmark/capacity request
+(e.g. a workload above the configured document cap), and `422 validation_error`
+for capacity assumptions outside their bounds. `POST /v1/scaling/capacity` is
+**not** gated by read-only mode: it computes arithmetic and mutates nothing.
 
 `POST /v1/answer` is deliberately layered: `candidate_depth` controls the
 first-stage retrieval pool, `max_evidence` controls how many passages reach the
@@ -769,6 +846,16 @@ notice. Character counts are never used as token counts.
   Generation is refused in read-only mode and when disabled, so the public demo is
   not a model endpoint. Prompt-based defences reduce, but do not eliminate,
   prompt-injection risk from retrieved text.
+- **Scalability measurements are single-node and synthetic.** The performance
+  harness measures the *current prototype* on one machine over a generated corpus;
+  the numbers characterise cost, not relevance, and are not a production
+  throughput claim. The 10M-document capacity model is **deterministic arithmetic
+  over stated assumptions**, not a simulation, and its throughput inputs must be
+  supplied from a real benchmark. The proposed distributed architecture is
+  **design only** — none of PostgreSQL, a distributed lexical engine, a queue or a
+  Qdrant server is implemented or required. Dense/hybrid/rerank scaling is not
+  measured. Load testing targets a **locally controlled** server, never the public
+  demo.
 - `/v1/search` rejects unknown `mode` values with a clear message rather than
   pretending to support them.
 - **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
@@ -804,13 +891,19 @@ src/rag_workbench/
   answering/           context selection, prompt trust boundary (v1/v2 variants),
                        Ollama adapter, citation verification, reference-evidence
                        coverage, pipeline, quality eval, recorded artifacts
+  scaling/             synthetic corpus generator, performance harness, capacity
+                       model, load-testing harness, architecture design data,
+                       recorded-benchmark loading, application service
   api/                 FastAPI factory, dependencies, routes
 ui/streamlit_app.py    Thin HTTP client
 ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
 datasets/              Committed evaluation datasets (bundled legal-contracts,
                        answer-quality set)
+docs/                  scaling_to_10m.md (10M-document design), case_studies.md
 benchmarks/recorded/   Committed experiment artifacts for the read-only demo
 benchmarks/recorded_answers/  Committed recorded answer demos + quality reports
+benchmarks/recorded_scaling/  Committed scalability baselines (Phase 6)
+benchmarks/load/       Optional Locust load-test definition
 tests/                 unit + integration tests, tiny redistributable fixtures
 .github/workflows/ci.yml
 ```
@@ -836,7 +929,14 @@ tests/                 unit + integration tests, tiny redistributable fixtures
   states, retrieved-vs-selected context, an **Answer Laboratory** UI page, a CLI
   `answer` command group, a committed grounded-answer quality set and report, and
   recorded answer artifacts for the read-only demo.
-- **Later:** portfolio polish and the scaling-to-10M design.
+- **Phase 6 (done):** a bounded local **performance harness** over a deterministic
+  synthetic corpus, a **deterministic capacity model** with explicit bases, a
+  **lightweight load-testing harness** (plus an optional Locust definition),
+  committed scaling baselines, a **Scalability Laboratory** Streamlit page, and a
+  documented design for ~10M documents that preserves the retrieval interfaces
+  (`docs/scaling_to_10m.md`, `docs/case_studies.md`).
+- **Later (optional):** a hosted dense/reranker benchmark, and a real distributed
+  prototype behind the existing Protocols. Neither is claimed as built.
 
 ---
 
@@ -1116,6 +1216,44 @@ consistency property that is never asserted automatically.
 
 First-call latency is higher because the model is loaded on demand. Run
 `rag-workbench answer record` to reproduce with your own model.
+
+---
+
+## 17. Observed Phase 6 results (scalability baselines)
+
+Measured by `rag-workbench scaling run` on one machine (Windows 11, Python 3.13.5,
+16 logical cores, AMD64) over a deterministic synthetic corpus (seed 0), committed
+as `benchmarks/recorded_scaling/*.json`. **These are cost measurements on a single
+node, not a throughput claim;** see [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md).
+
+**Paragraph chunking (220/40 tokens), BM25, `query_mode=or`, 20 queries per cell:**
+
+| Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index | @10 p50 | @100 p50 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 687 | 34.7 | 1.8 MB | 177 KB | 3.8 ms | 6.5 ms |
+| 1,000 | 7,774 | 38.2 | 18.8 MB | 2.0 MB | 21.1 ms | 26.3 ms |
+| 5,000 | 38,709 | 33.1 | 87.3 MB | 9.9 MB | 112.2 ms | 105.0 ms |
+
+**Fixed-token chunking (512/64 tokens), BM25:**
+
+| Documents | Chunks | Ingest (docs/s) | DB size | FTS5 index |
+|---:|---:|---:|---:|---:|
+| 1,000 | 18,154 | 24.5 | 21.2 MB | 2.4 MB |
+| 5,000 | 90,470 | 21.6 | 97.3 MB | 11.8 MB |
+
+**Findings.**
+
+- Single-writer ingestion is ~22–38 tiny documents/second and BM25 p50 grows from
+  ~4 ms to ~112 ms across a ~56× increase in chunks. The prototype does not scale
+  linearly, and resizing a single node is not the path to 10M documents.
+- **Chunking strategy dominates chunk count:** a larger token budget produced
+  *more* chunks, because fixed-token windows never cross block boundaries. This is
+  the corpus's most influential cost assumption.
+- The capacity model projects ~3.5 TB total for the `typical` 10M-document
+  scenario (including replicas, a backup, a reindex working set and 25% headroom);
+  the measured FTS5 size (~267 B/chunk) calibrates its lexical estimate.
+- Dense, hybrid and reranked scaling were **not** measured (they need the optional
+  `dense` extra and local model weights).
 
 ---
 

@@ -3,8 +3,8 @@
 This module performs no retrieval, ingestion or evaluation logic itself: every
 action is an HTTP request to the API, so the UI and the API can never disagree
 about how the system works. Pages: search and mode comparison, the Chunking,
-Reranking, Evaluation and Performance Laboratories, a Failure Explorer and the
-system/corpus views.
+Reranking, Answer, Evaluation, Performance and Scalability Laboratories, a Failure
+Explorer and the system/corpus views.
 """
 
 from __future__ import annotations
@@ -1348,6 +1348,283 @@ def render_performance_lab() -> None:
     st.dataframe(table, use_container_width=True, key="perf-compare-table")
 
 
+def _human_bytes(num_bytes: float | None) -> str:
+    """Render a byte count in binary units; mirrors the backend formatter."""
+
+    if num_bytes is None:
+        return "—"
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def _render_scaling_baselines() -> None:
+    st.caption(
+        "Locally measured indexing and retrieval cost at several corpus sizes. "
+        "These are real measurements from one machine, committed as artifacts so the "
+        "read-only demo can show them — they are not a production throughput claim."
+    )
+    status, body = api_get("/v1/scaling-benchmarks")
+    if status != 200 or not isinstance(body, dict):
+        st.error(f"Could not load scaling benchmarks ({status}): {body}")
+        return
+    benchmarks = body.get("benchmarks", [])
+    if not benchmarks:
+        st.info(
+            "No recorded scaling benchmarks. Run "
+            "`rag-workbench scaling run --documents 100,1000,5000 --record` locally."
+        )
+        return
+
+    labels = {}
+    for item in benchmarks:
+        marker = " [invalid]" if item.get("invalid") else ""
+        labels[
+            f"{item.get('benchmark_id')}{marker} • "
+            f"{item.get('workload_count')} workloads • docs≤{item.get('documents_max')}"
+        ] = item.get("benchmark_id")
+    selected = st.selectbox("Recorded benchmark", list(labels.keys()), key="scaling-select")
+    detail_status, record = api_get(f"/v1/scaling-benchmarks/{labels[selected]}")
+    if detail_status != 200 or not isinstance(record, dict):
+        st.error(f"Could not load benchmark ({detail_status}): {record}")
+        return
+
+    env = record.get("environment") or {}
+    hardware = record.get("hardware") or {}
+    st.caption(
+        f"created {record.get('created_at')} • commit {record.get('git_commit')} • "
+        f"platform {env.get('platform')} • python {env.get('python')} • "
+        f"cpu {hardware.get('processor')} ({hardware.get('cpu_count')} cores)"
+    )
+    corpus = record.get("corpus") or {}
+    st.caption(
+        f"corpus {corpus.get('documents')} docs • "
+        f"seed {(corpus.get('config') or {}).get('seed')} • "
+        f"fingerprint {str(corpus.get('fingerprint'))[:16]}"
+    )
+
+    rows = []
+    for workload in record.get("workloads", []):
+        ingestion = workload.get("ingestion") or {}
+        index = workload.get("index") or {}
+        memory = workload.get("memory") or {}
+        rows.append(
+            {
+                "documents": workload.get("documents"),
+                "chunks": workload.get("chunks"),
+                "docs_per_second": ingestion.get("documents_per_second"),
+                "source_bytes": index.get("source_bytes"),
+                "db_bytes": index.get("db_bytes"),
+                "fts_bytes": index.get("fts_bytes"),
+                "peak_rss_mb": memory.get("peak_rss_mb"),
+            }
+        )
+    if rows:
+        st.markdown("**Indexing footprint by corpus size**")
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+
+    latency_rows = []
+    for workload in record.get("workloads", []):
+        for retrieval in workload.get("retrieval", []):
+            stats = retrieval.get("latency_ms") or {}
+            latency_rows.append(
+                {
+                    "documents": workload.get("documents"),
+                    "mode": retrieval.get("mode"),
+                    "depth": retrieval.get("candidate_depth"),
+                    "queries": retrieval.get("queries"),
+                    "p50_ms": stats.get("p50"),
+                    "p95_ms": stats.get("p95"),
+                    "errors": retrieval.get("errors"),
+                }
+            )
+    if latency_rows:
+        st.markdown("**Retrieval latency by corpus size**")
+        st.dataframe(latency_rows, hide_index=True, use_container_width=True)
+
+    if record.get("failures"):
+        st.warning("Recorded failures during this run: " + "; ".join(record["failures"]))
+    st.markdown("**Limitations** (recorded with the artifact)")
+    for note in record.get("limitations", []):
+        st.caption(f"• {note}")
+
+
+def _render_scaling_capacity() -> None:
+    st.caption(
+        "A deterministic capacity model, not a simulation. Every line is labelled "
+        "with its basis: exact arithmetic under the stated assumptions, or a ratio "
+        "taken from vendor documentation. Throughput inputs are treated as measured."
+    )
+    columns = st.columns(3)
+    documents = columns[0].number_input(
+        "Documents", 1_000, 1_000_000_000, 10_000_000, step=100_000, key="cap-docs"
+    )
+    chunks = columns[1].number_input(
+        "Chunks / document", 0.1, 200.0, 10.0, step=0.5, key="cap-chunks"
+    )
+    dimensions = columns[2].selectbox(
+        "Embedding dimensions", [384, 512, 768, 1024, 1536], key="cap-dims"
+    )
+    columns2 = st.columns(4)
+    vector_indexes = columns2[0].number_input("Vector indexes", 1, 8, 1, key="cap-vidx")
+    replication = columns2[1].number_input("Replication factor", 1, 6, 2, key="cap-repl")
+    backups = columns2[2].number_input("Backup copies", 0, 4, 1, key="cap-backup")
+    headroom = columns2[3].slider("Operational headroom", 0.0, 1.0, 0.25, 0.05, key="cap-head")
+
+    st.markdown("**Ingestion projection (optional)**")
+    columns3 = st.columns(4)
+    docs_per_day = columns3[0].number_input(
+        "Documents / day", 0, 50_000_000, 100_000, step=10_000, key="cap-dpd"
+    )
+    throughput = columns3[1].number_input(
+        "Embedding chunks/s/worker", 0.1, 5000.0, 20.0, step=1.0, key="cap-tput"
+    )
+    workers = columns3[2].number_input("Workers", 1, 256, 4, key="cap-workers")
+    indexing_rate = columns3[3].number_input(
+        "Indexing chunks/s", 1.0, 100000.0, 200.0, step=10.0, key="cap-idx"
+    )
+
+    payload = {
+        "storage": {
+            "documents": int(documents),
+            "chunks_per_document": float(chunks),
+            "embedding_dimensions": int(dimensions),
+            "vector_indexes": int(vector_indexes),
+            "replication_factor": int(replication),
+            "backup_copies": int(backups),
+            "operational_headroom": float(headroom),
+        },
+        "ingestion": {
+            "documents_per_day": int(docs_per_day),
+            "chunks_per_document": float(chunks),
+            "embedding_chunks_per_second_per_worker": float(throughput),
+            "indexing_chunks_per_second": float(indexing_rate),
+            "workers": int(workers),
+        },
+    }
+    status, body = api_post("/v1/scaling/capacity", json=payload)
+    if status != 200 or not isinstance(body, dict):
+        st.error(f"Capacity model failed ({status}): {body}")
+        return
+
+    storage = body.get("storage") or {}
+    components = storage.get("components") or []
+    if components:
+        rows = [
+            {
+                "component": component.get("label"),
+                "size": _human_bytes(component.get("bytes")),
+                "basis": component.get("basis"),
+                "note": component.get("note"),
+            }
+            for component in components
+        ]
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+    totals = [
+        ("primary", storage.get("primary_bytes")),
+        ("replicas", storage.get("replica_bytes")),
+        ("backups", storage.get("backup_bytes")),
+        ("reindex working set", storage.get("reindex_bytes")),
+        ("operational headroom", storage.get("headroom_bytes")),
+        ("TOTAL", storage.get("total_bytes")),
+    ]
+    st.markdown("**Totals**")
+    st.dataframe(
+        [{"line": name, "size": _human_bytes(value)} for name, value in totals],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    ingestion = body.get("ingestion")
+    if isinstance(ingestion, dict):
+        st.markdown("**Ingestion**")
+        message = (
+            f"chunks/day {ingestion.get('chunks_per_day'):,.0f} • "
+            f"bottleneck {ingestion.get('bottleneck_stage')} "
+            f"{ingestion.get('bottleneck_per_day'):,.0f} chunks/day • "
+            f"utilization {ingestion.get('utilization'):.2f}"
+        )
+        if ingestion.get("keeps_up"):
+            st.success("Configuration keeps up. " + message)
+        else:
+            st.warning("Projected backlog. " + message)
+        st.caption(
+            f"effective workers {ingestion.get('effective_workers'):.2f} "
+            "(non-linear scaling)"
+        )
+        for note in ingestion.get("notes", []):
+            st.caption(f"• {note}")
+
+    scenarios = body.get("scenarios")
+    if isinstance(scenarios, dict) and scenarios:
+        st.markdown("**Document-size scenarios**")
+        rows = []
+        for name, estimate in scenarios.items():
+            rows.append(
+                {
+                    "scenario": name,
+                    "chunks/doc": (estimate.get("assumptions") or {}).get(
+                        "chunks_per_document"
+                    ),
+                    "total": _human_bytes(estimate.get("total_bytes")),
+                }
+            )
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
+def _render_scaling_architecture() -> None:
+    status, body = api_get("/v1/scaling/architecture")
+    if status != 200 or not isinstance(body, dict):
+        st.error(f"Could not load architecture ({status}): {body}")
+        return
+    st.caption(
+        "Design data shared by this page and `docs/scaling_to_10m.md`, so the UI and "
+        "the document state the same migration story."
+    )
+    left, right = st.columns(2)
+    with left:
+        st.markdown("**Current implementation** (measured)")
+        st.code(body.get("current_diagram", ""), language="text")
+    with right:
+        st.markdown("**Proposed 10M-document architecture** (design, not built)")
+        st.code(body.get("proposed_diagram", ""), language="text")
+
+    for row in body.get("rows", []):
+        with st.expander(f"{row.get('area')} — {row.get('current')} → {row.get('proposed')}"):
+            st.markdown(f"**Why replaced.** {row.get('reason')}")
+            st.markdown(f"**Interface preserved.** {row.get('interface')}")
+            st.markdown(f"**Trade-off.** {row.get('tradeoff')}")
+            st.markdown(f"**Still unknown.** {row.get('unknowns')}")
+
+
+def render_scalability_lab() -> None:
+    st.header("Scalability Laboratory")
+    st.caption(
+        "How the local prototype behaves as data grows, and the design required to "
+        "reach ~10 million documents. The prototype does not serve that scale; the "
+        "measurements are real and the design is explicitly a plan."
+    )
+    status, cfg = api_get("/v1/config")
+    if status == 200 and isinstance(cfg, dict):
+        st.caption(
+            f"recorded scaling benchmarks {cfg.get('recorded_scaling_benchmarks')} • "
+            f"document cap {cfg.get('scaling_max_documents')} • "
+            f"dense available {cfg.get('dense_available')}"
+        )
+    tab_baselines, tab_capacity, tab_architecture = st.tabs(
+        ["Measured baselines", "Capacity explorer", "Architecture explorer"]
+    )
+    with tab_baselines:
+        _render_scaling_baselines()
+    with tab_capacity:
+        _render_scaling_capacity()
+    with tab_architecture:
+        _render_scaling_architecture()
+
+
 PAGES = {
     "Status": render_status,
     "Corpus Manager": render_corpus,
@@ -1359,6 +1636,7 @@ PAGES = {
     "Evaluation Lab": render_evaluation_lab,
     "Failure Explorer": render_failure_explorer,
     "Performance Lab": render_performance_lab,
+    "Scalability Laboratory": render_scalability_lab,
 }
 
 
@@ -1371,7 +1649,8 @@ def main() -> None:
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption(
         "BM25 • dense (Sentence Transformers) • hybrid RRF • clause-aware chunking "
-        "• cross-encoder reranking • retrieval evaluation • grounded answers"
+        "• cross-encoder reranking • retrieval evaluation • grounded answers "
+        "• scalability baselines & design"
     )
     if READ_ONLY:
         st.sidebar.info(

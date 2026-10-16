@@ -187,6 +187,8 @@ def app_config(
     available = dense_feature_available()
     generation = probe_generation(settings)
     answer_demos = load_answer_demos(settings.recorded_answers_dir)
+    scaling_service = request.app.state.scaling_service
+    scaling_benchmarks = scaling_service.list_benchmarks()
     return {
         "read_only": settings.read_only,
         "autoseed_sample": settings.autoseed_sample,
@@ -222,4 +224,11 @@ def app_config(
         "recorded_answer_demos": len(answer_demos),
         "recorded_answers_dir": str(settings.recorded_answers_dir),
         "recorded_answers_exists": settings.recorded_answers_dir.is_dir(),
+        # Scalability (Phase 6). Recorded locally measured benchmarks plus the
+        # design data are exposed read-only; the capacity calculator is pure
+        # arithmetic and needs no model or extra dependency.
+        "recorded_scaling_benchmarks": len(scaling_benchmarks),
+        "recorded_scaling_dir": str(settings.recorded_scaling_dir),
+        "recorded_scaling_exists": settings.recorded_scaling_dir.is_dir(),
+        "scaling_max_documents": settings.scaling_max_documents,
     }
