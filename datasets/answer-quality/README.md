@@ -24,7 +24,7 @@ questions cannot hide a missing half. Each question is classified as:
   candidate pool.
 
 Complete and partial coverage are reported separately. Two reference cases are
-worth inspecting (`README` §16): `aq-002` is a genuine
+worth inspecting (`README` §5.4): `aq-002` is a genuine
 `retrieved_but_excluded` (fixed by `max_evidence=6`), and `aq-007` has *complete*
 coverage yet still receives a wrong answer — showing that coverage is **not**
 correctness.
@@ -45,7 +45,7 @@ uv run rag-workbench answer record  --profile <profile-id> `
 
 `answer record` writes the artifacts to `benchmarks/recorded_answers/`; pass
 `--no-demos` to write only the aggregate report for a configuration sweep. The
-observed metrics and their interpretation are in the README §16.
+observed metrics and their interpretation are in the README §5.4.
 
 This directory has no `manifest.json`, so the evaluation dataset lister (which
 requires the BEIR-style manifest) ignores it.

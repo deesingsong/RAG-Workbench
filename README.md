@@ -1,10 +1,12 @@
 # RAG Workbench
 
-A local-first, zero-mandatory-cost **RAG retrieval engineering laboratory**. The
-goal is to make retrieval itself inspectable: ingest documents, chunk them
-deterministically, index them in SQLite, run lexical (BM25) and dense retrieval
-(or a hybrid of both), and read back provenance-rich citations you can verify
-against the source.
+## 1. Project overview
+
+RAG Workbench is a local-first, zero-mandatory-cost **RAG retrieval engineering
+laboratory**. It exists to make retrieval itself inspectable: ingest documents,
+chunk them deterministically, index them in SQLite, run lexical (BM25) and dense
+retrieval (or a hybrid of both), optionally rerank the candidate pool, and read
+back provenance-rich citations you can verify against the source.
 
 This is an engineering research platform, not a "chat with your PDFs" clone. In
 this repository there is **no LLM, no API key, no GPU and no Docker requirement**
@@ -12,37 +14,91 @@ for anything documented below. The only optional components are local models:
 Sentence Transformers (dense/rerank) and a separately installed Ollama
 (grounded answers).
 
-**Portfolio arc.** The project is built in reviewed phases, each a study in a
-different part of retrieval engineering: a working BM25 vertical slice (Phases
-0–1), dense + hybrid retrieval (Phase 2), clause-aware chunking and cross-encoder
-reranking (Phase 3), a reproducible evaluation and failure-analysis platform
-(Phase 4), evidence-grounded answers with deterministic citation verification
-(Phase 5), and a measured scalability case study for ~10 million documents
-(Phase 6).
+A visitor can:
 
-> **Status: Phases 0–6 complete.**
-> Implemented: ingestion (TXT / Markdown / text PDF), deterministic chunking
-> (`fixed_token`, `paragraph`, **`clause_aware`**), SQLite metadata + FTS5
-> indexing, BM25 search, local **Sentence Transformers** embeddings, a
-> **Qdrant-local vector index**, **dense** and **RRF hybrid** search, vector index
-> status / rebuild / reconciliation, optional local **cross-encoder reranking**,
-> a retrieval **evaluation** platform (SciFact + a synthetic legal set) with
-> failure diagnostics and committed artifacts, optional **Ollama grounded
-> answers** with deterministic citation verification and an answer-quality audit,
-> and a **scalability case study**: a bounded performance harness, a
-> deterministic capacity model, recorded baselines and a documented design for
-> ~10M documents. A FastAPI backend, a CLI and a thin Streamlit client sit on top.
-> Nothing in this README claims a capability that was not implemented and tested;
-> measured results are labelled as such.
+- open the hosted app and run BM25 search over an auto-seeded sample corpus;
+- browse committed retrieval experiments, grounded-answer demonstrations and
+  scalability baselines without running a model;
+- read the architecture, the recorded measurements and the failure case studies
+  that document how the system was built and where its limits are;
+- reproduce any of it locally with a small, offline, zero-cost install.
+
+The project demonstrates a set of concrete retrieval-engineering problems rather
+than product surface area:
+
+- deterministic, configuration-hashed **index profiles** so chunking experiments
+  never contaminate one another;
+- **lexical, dense and hybrid (RRF)** retrieval behind one consistent rank
+  convention, with inspectable component ranks and stage timings;
+- **clause-aware chunking** for legal documents, preserving a hierarchical
+  section path instead of losing structure at chunk boundaries;
+- an **evaluation platform** with real IR metrics, a separate candidate-pool
+  recall, matched reranking comparisons and rule-based failure diagnostics;
+- **evidence-grounded answers** with a strict schema, a prompt trust boundary and
+  deterministic citation verification that reports what it cannot check;
+- a bounded **scalability case study** with a measured harness, a
+  basis-labelled capacity model and a documented design for ~10 million
+  documents;
+- a **read-only public deployment** that serves real recorded evidence and a
+  per-session capability model without exposing a model endpoint or mutable
+  state.
 
 ---
 
-## 1. What works today
+## 2. Live demonstration
+
+The hosted app is at:
+
+**<https://rag-workbench-nzrawpf9zawzhz7xjcpok6.streamlit.app/>**
+
+The free Community Cloud instance runs **BM25-only and read-only** (no
+deep-learning extra, an ephemeral filesystem). That constraint is surfaced in the
+app rather than hidden, and it splits the experience into what is computed live
+and what is served from committed artifacts.
+
+### 2.1 Live in the hosted app
+
+- **BM25 lexical search** over the bundled sample corpus, which is auto-seeded on
+  first start. An empty index on a fresh instance is filled by a trusted startup
+  bootstrap, so there is always something to search.
+- **Browsing the committed datasets and recorded artifacts**: the Evaluation Lab
+  lists bundled datasets and recorded experiments; the Failure Explorer shows
+  per-query diagnostics; the Performance Lab and Scalability Laboratory show
+  recorded baselines; the Answer Laboratory shows recorded demonstrations and
+  quality reports.
+- **The deterministic capacity calculator** (`POST /v1/scaling/capacity`). It is
+  pure arithmetic over stated assumptions and mutates nothing, so it works in
+  read-only mode.
+- **Laboratory Controls** (the per-session availability/permission panel) and the
+  **deployment diagnostics** expander, which reports the backend build revision
+  and compares it to the source tree.
+
+### 2.2 Recorded, not live
+
+The following are **not executed** on the free instance. Their results are
+committed artifacts that the app displays, with each record labelled
+`source="recorded"` so it can never be mistaken for live inference:
+
+- **Dense and hybrid retrieval experiments** — recorded SciFact and legal
+  experiments are shown; selecting `dense`/`hybrid` live returns a clear
+  `422 profile_not_dense` (or `503 dense_unavailable` for a degenerate dense
+  profile).
+- **Cross-encoder reranking experiments** — recorded; the live Reranking
+  Laboratory returns `503 reranker_unavailable` because the extra is absent.
+- **Grounded-answer demonstrations and quality reports** — recorded; live
+  generation is refused in read-only mode, so the public app is never a model
+  endpoint.
+- **Scalability baselines** — recorded single-machine measurements; the load-test
+  harness refuses to target the public demo.
+
+---
+
+## 3. Features
 
 - **Ingestion** of `.txt`, `.md` / `.markdown` and text-extractable `.pdf`
   documents, with graceful failure for malformed or empty input.
 - **Deterministic chunking** with three strategies, configuration-hashed into
-  isolated *index profiles* (see §6 and §9).
+  isolated *index profiles* (see §4.3 and §4.4).
 - **Persistent index** in a single SQLite file: relational metadata plus an
   FTS5 virtual table kept synchronized by database triggers.
 - **BM25 retrieval** with a single consistent rank convention, provenance-rich
@@ -84,8 +140,8 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
 - **Read-only deployment mode** for the public demo: the backend refuses every
   mutating endpoint and serves the bundled datasets plus committed experiment
   artifacts, so the live app shows real recorded results without mutable state.
-- **Optional evidence-grounded answers** (Phase 5) over the retrieved passages,
-  using a **local Ollama** model: a strict JSON answer schema, a fixed trusted
+- **Optional evidence-grounded answers** over the retrieved passages, using a
+  **local Ollama** model: a strict JSON answer schema, a fixed trusted
   instruction block kept separate from the untrusted passages, **deterministic
   citation verification**, first-class `insufficient_evidence` and
   `generation_error` states, and *retrieved* vs *selected* context kept distinct.
@@ -103,10 +159,10 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
   Hello, Touch ID, a security key), never a shared token — lets the operator run
   small, server-bounded BM25 evaluations while the public deployment remains
   read-only.
-- **Scalability engineering** (Phase 6): a bounded, reproducible **performance
-  harness** over a deterministic synthetic corpus (ingestion throughput, on-disk
-  footprint and BM25 latency by corpus size), a **deterministic capacity model**
-  that labels every line with its basis (`exact` / `measured` / `assumed` /
+- **Scalability engineering**: a bounded, reproducible **performance harness**
+  over a deterministic synthetic corpus (ingestion throughput, on-disk footprint
+  and BM25 latency by corpus size), a **deterministic capacity model** that
+  labels every line with its basis (`exact` / `measured` / `assumed` /
   `documented` / `unknown`), a **lightweight local load-testing harness** (with an
   optional Locust definition), committed scaling baselines with recorded code
   provenance, and a **design for ~10 million documents** that preserves the
@@ -117,447 +173,9 @@ reranking (Phase 3), a reproducible evaluation and failure-analysis platform
 
 ---
 
-## 2. Requirements
+## 4. Architecture
 
-- **Python 3.12** (3.11 is likely fine but is not tested here).
-- **uv** — https://docs.astral.sh/uv/ — for environment and dependency
-  management.
-- Windows PowerShell is the documented shell; the commands are equivalent on
-  macOS/Linux.
-
-**BM25-only use needs no model, no download and no network.** Dense and hybrid
-retrieval need the optional `dense` extra (§3) and download the embedding model
-once (about 90 MB). **Cross-encoder reranking** needs the same `dense` extra and
-downloads the reranker model once on first use (about 90 MB). **Answer generation**
-(Phase 5) is optional and needs a **separately installed local Ollama** with one
-model pulled or imported; with no Ollama the rest of the project is unaffected.
-The core install, the tests and the default demo need no Docker, cloud account,
-API key or GPU. The **Phase 6 scalability tools** (synthetic corpus generator,
-performance harness, capacity model and built-in load-test harness) are part of the
-core install; Locust (`load` extra) and `psutil` (`profiling` extra) are optional
-extras, or can be used ad hoc via `uv run --with ...`.
-
----
-
-## 3. Setup (Windows PowerShell)
-
-```powershell
-# 1. Install uv if you do not have it
-#    (see https://docs.astral.sh/uv/getting-started/installation/)
-
-# 2. From the repository root, create the environment and install core dependencies
-uv sync
-
-# 2b. OPTIONAL: add dense retrieval and cross-encoder reranking
-#     (Sentence Transformers + torch, CPU build)
-uv sync --extra dense
-
-# 3. Optional: copy the example configuration
-Copy-Item .env.example .env
-
-# 4. Create the SQLite schema + FTS5 index
-uv run rag-workbench init-db
-```
-
-`uv sync` creates an isolated `.venv` from `pyproject.toml` / `uv.lock`. The core
-install deliberately excludes deep-learning packages so that BM25 and the test
-suite stay light and offline.
-
-### Optional: enable answer generation (Phase 5)
-
-Generation is off by default. To turn it on you need a **local** Ollama serving one
-model. Install Ollama from https://ollama.com/download (a signed Windows installer),
-then either pull a model or *import* an existing GGUF without downloading it:
-
-```powershell
-# Option A: pull a small model (network, ~1 GB)
-ollama pull qwen2.5:1.5b-instruct
-
-# Option B: import a GGUF you already have (no download)
-#   create a Modelfile whose first line is:  FROM C:\path\to\model.gguf
-ollama create qwen2.5:1.5b-instruct -f .\Modelfile
-
-# Start the server if it is not already running
-ollama serve
-
-# Point RAG Workbench at it and enable generation
-$env:RAG_WORKBENCH_GENERATION_ENABLED = "true"
-$env:RAG_WORKBENCH_OLLAMA_MODEL = "qwen2.5:1.5b-instruct"
-```
-
-Only a **loopback** Ollama endpoint is accepted by default; a remote base URL
-requires the explicit `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE=true` opt-in. Nothing is
-downloaded at app start-up.
-
----
-
-## 4. Run it
-
-Start the API (first terminal):
-
-```powershell
-uv run rag-workbench serve
-# or, equivalently:
-uv run uvicorn --factory rag_workbench.api.app:create_app --reload
-```
-
-API docs: http://127.0.0.1:8000/docs — health check: http://127.0.0.1:8000/health
-
-Start the UI (second terminal):
-
-```powershell
-uv run streamlit run ui/streamlit_app.py
-```
-
-### Ingest and search from the CLI
-
-```powershell
-# Lexical (BM25) profile
-uv run rag-workbench ingest tests/fixtures/sample_contract.txt --collection contracts
-uv run rag-workbench search "termination for convenience" --top-k 5
-
-# Dense profile: creates embeddings on ingest (downloads the model on first use)
-uv run rag-workbench ingest tests/fixtures/sample_contract.txt --collection contracts --embed
-
-# Three retrieval modes over the same query
-uv run rag-workbench search "termination for convenience" --mode bm25   --top-k 3
-uv run rag-workbench search "termination for convenience" --mode dense  --top-k 3
-uv run rag-workbench search "termination for convenience" --mode hybrid --top-k 3
-
-# Inspect the vector index and repair it if needed
-uv run rag-workbench vectors-status
-uv run rag-workbench rebuild-vectors --all
-
-# Clause-aware legal chunking and clause inspection
-uv run rag-workbench ingest tests/fixtures/legal_contract.txt --collection contracts --strategy clause_aware
-uv run rag-workbench chunks --limit 50
-
-# Cross-encoder reranking over a first-stage candidate pool
-uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --rerank --rerank-candidates 20
-uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --rerank --reranker-model cross-encoder/ms-marco-MiniLM-L6-v2
-```
-
-### Evaluate retrieval from the CLI
-
-```powershell
-# List bundled / imported datasets
-uv run rag-workbench datasets list
-
-# Import a BEIR-format dataset from local files (no network)
-uv run rag-workbench datasets import --name mycorpus `
-  --corpus corpus.jsonl --queries queries.jsonl --qrels qrels.tsv `
-  --source "…" --license "…" --mapping document
-
-# Download the BEIR SciFact benchmark (explicit command; ~2 MB)
-uv run rag-workbench datasets download-scifact
-
-# Ingest a dataset's corpus into an index profile, then evaluate it
-uv run rag-workbench datasets ingest scifact --strategy paragraph          # lexical profile
-uv run rag-workbench datasets ingest scifact --strategy paragraph --embed  # dense profile
-
-uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
-  --mode bm25 --query-mode or --candidate-depth 20 --top-k 10 --k 1,3,5,10 `
-  --label "SciFact BM25"
-
-# Matched reranking: baseline and reranked start from the SAME 20-passage pool
-uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
-  --mode bm25 --candidate-depth 20 --top-k 10 --label "pool20 baseline"
-uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
-  --mode bm25 --candidate-depth 20 --top-k 10 --rerank --rerank-candidates 20 `
-  --label "pool20 + rerank"
-
-# Inspect, diagnose, export, and commit a read-only artifact
-uv run rag-workbench eval list --dataset scifact
-uv run rag-workbench eval show <experiment-id>
-uv run rag-workbench eval failures <experiment-id>
-uv run rag-workbench eval export <experiment-id> --format csv --out run.csv
-uv run rag-workbench eval record <experiment-id> --name scifact-bm25.json
-```
-
-Example dense output (real MiniLM run, see §13):
-
-```
-query='termination for convenience' mode=dense profile=p-fd18e21e2a5b3664 hits=3
-  #1 cosine=0.4360 sample_contract.txt | 3. Term and Termination > 3.1 Termination for Convenience
-  #2 cosine=0.4343 sample_contract.txt | 3. Term and Termination > 3.2 Termination for Cause
-  #3 cosine=0.1460 sample_contract.txt | 2. Fees and Payment > 2.1 Payment Terms
-```
-
-Example hybrid output (component ranks preserved):
-
-```
-  #1 rrf=0.0328 sample_contract.txt | ... 3.1 Termination for Convenience [bm25_rank=1 dense_rank=1]
-  #2 rrf=0.0161 sample_contract.txt | ... 3.2 Termination for Cause         [bm25_rank=None dense_rank=2]
-```
-
-Example rerank output (real cross-encoder, clause-aware profile, see §13):
-
-```
-  #1 rerank=10.227 ... 1.1 "Confidential Information" [retrieval_rank=1 movement=0]
-  #2 rerank=5.505  ... 4.1 Confidentiality            [retrieval_rank=3 movement=+1]
-  #3 rerank=1.919  ... 3.3(b) Return of Materials     [retrieval_rank=2 movement=-1]
-```
-
-### Answer from the CLI (optional, needs local Ollama)
-
-```powershell
-# Generate a grounded answer locally (requires RAG_WORKBENCH_GENERATION_ENABLED=true)
-uv run rag-workbench answer ask "What is the notice period for termination?" `
-  --collection legal-contracts --query-mode or --max-evidence 6
-
-# Run the bundled grounded-answer quality set and print the metrics.
-# --seed makes repeated runs reproducible; --label names the configuration.
-uv run rag-workbench answer quality `
-  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
-  --query-mode or --max-evidence 6 --seed 0 --label "v1 / me=6 / bm25 / or"
-
-# Record answer demos + a quality report as committed read-only artifacts
-# (--no-demos writes only the aggregate report, for a configuration sweep)
-uv run rag-workbench answer record `
-  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
-  --query-mode or --max-evidence 6 --seed 0 --label "recommended"
-
-# Inspect recorded demos with no model running
-uv run rag-workbench answer demos
-uv run rag-workbench answer demo <demo-id>
-```
-
-Answer artifacts live in `benchmarks/recorded_answers/`: one `answer_demo` JSON per
-question plus one `answer_quality` report per configuration. All carry
-`source="recorded"` so the public demo can never present them as live inference.
-The instruction wording is selectable with `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT`
-(`v1` default, `v2` for the audited alternative — see §16). A fixed `--seed` makes
-a repeated request reproducible; leaving it unset samples normally.
-
-### Scalability and load testing from the CLI (Phase 6)
-
-```powershell
-# Generate a reproducible synthetic corpus to inspect on disk
-uv run rag-workbench scaling corpus --documents 500 --out data\scaling-corpus
-
-# Run bounded indexing + BM25 benchmarks and record committed artifacts.
-# No extra install: BM25 uses only the core dependencies.
-uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --record
-
-# Compare chunking strategies on the same corpus
-uv run rag-workbench scaling run --documents 1000,5000 --strategy fixed_token `
-  --max-tokens 512 --overlap-tokens 64 --record
-
-# Capacity model for ~10M documents (storage + optional ingestion projection).
-# Defaults for throughput/overheads are illustrative assumptions (basis "assumed").
-uv run rag-workbench scaling capacity --documents 10000000 --scenario typical
-uv run rag-workbench scaling capacity --documents 10000000 --scenario typical `
-  --documents-per-day 100000 --embedding-chunks-per-second-per-worker 20 --workers 4
-
-# Inspect recorded baselines with no API or model running
-uv run rag-workbench scaling list
-uv run rag-workbench scaling show <benchmark-id>
-
-# Bounded SMOKE-level load test against a LOCAL server (never the public demo).
-# A warm-up phase is excluded, and per-endpoint latency is reported.
-uv run rag-workbench serve            # in another terminal
-uv run rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed `
-  --users 4 --duration 10 --warmup 2
-```
-
-`scaling run` refuses to index more than `RAG_WORKBENCH_SCALING_MAX_DOCUMENTS`
-documents (default 20,000), so an accidental run cannot exhaust local storage.
-Every recorded artifact carries the code revision and whether the working tree was
-clean (`provenance`); a run from a dirty tree is flagged rather than presented as a
-clean revision.
-
-`rag-workbench scaling load-test` uses only `httpx`. Its numbers are a
-**smoke-level, single-machine observation** of **HTTP/API throughput across
-endpoints** — they are **not** RAG generation throughput, not retrieval throughput,
-and not a latency SLO. For richer reporting the same read-only workloads are
-available through the optional Locust definition:
-
-```powershell
-uv run --extra load locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
-```
-
-Locust and `psutil` are declared as **optional extras** (`load` and `profiling`),
-so they are never installed by the core `uv sync` and the default demo stays
-zero-mandatory-cost. Install them when you want them:
-
-```powershell
-uv sync --extra load          # Locust
-uv sync --extra profiling     # psutil -> the harness records process RSS
-```
-
-`uv run --with locust ...` / `uv run --with psutil ...` also work without changing
-the environment. See [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md) and
-[`docs/case_studies.md`](docs/case_studies.md).
-
-### Try a PDF
-
-```powershell
-uv run rag-workbench ingest "C:\path\to\contract.pdf" --collection contracts --embed
-```
-
-### Deploying to Streamlit Community Cloud
-
-The repo is set up to run as a **single Streamlit app** there, because Community
-Cloud runs one Streamlit process and cannot run a separate FastAPI process:
-
-- When `RAG_WORKBENCH_API_URL` is unset, `ui/local_backend.py` starts the *same*
-  FastAPI app with uvicorn on `127.0.0.1:8765` inside the Streamlit process; the
-  UI talks to it over HTTP. No retrieval logic moves into the UI.
-- `st.secrets` values named `RAG_WORKBENCH_*` are copied into the environment
-  once, before the in-process API starts, so Cloud configuration needs no shell.
-- The public demo runs in **read-only mode**: set
-  `RAG_WORKBENCH_READ_ONLY=true` and `RAG_WORKBENCH_AUTOSEED_SAMPLE=true`.
-  The backend then refuses every mutating endpoint with `403 read_only_mode`,
-  while a trusted internal startup hook seeds the bundled sample contract so a
-  fresh instance still has something to search. The **Evaluation Lab**,
-  **Failure Explorer**, **Performance Lab** and **Answer Laboratory** show the
-  committed datasets under `datasets/` and the committed artifacts under
-  `benchmarks/recorded/` and `benchmarks/recorded_answers/`. In read-only mode the
-  answer endpoints are refused, so the app is never a model endpoint; live
-  generation additionally requires `RAG_WORKBENCH_GENERATION_ENABLED=true`.
-- The **Deployment diagnostics** expander on the Evaluation Lab reports the
-  backend `version` and its separate build `revision` (plus how it was resolved:
-  `git`, `git-file` or `source-hash`) and compares the revision to the source
-  tree on disk. If a hot reload left an older backend process running, the
-  mismatch appears as a warning instead of the app silently serving stale code.
-- The **Laboratory Controls** panel is per-session and cannot grant a permission
-  the backend refuses. In read-only mode its evaluation/generation/ingestion
-  toggles are disabled and explain why, and the public app still returns `403`
-  for every privileged request. Optionally, an operator may enable the
-  authenticated **owner mode** (`RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED=true`)
-  and sign in with a WebAuthn passkey to run small, server-bounded BM25
-  evaluations on the bundled `legal-contracts` dataset while the deployment stays
-  read-only for everyone else. The passkey private key never leaves the owner's
-  device; the backend stores only public credential records, requires user
-  verification, verifies the assertion against a single-use challenge and issues
-  a short-lived server-side session. No shared token and no frontend boolean can
-  unlock it — see §18.
-
-To deploy:
-
-1. Push to the repo's `main` branch. Streamlit Cloud **auto-redeploys on every
-   push**, so each completed phase appears in the live app.
-2. On <https://share.streamlit.io> → *New app* → repository
-   `deesingsong/RAG-Workbench`, branch `main`, **Main file path
-   `ui/streamlit_app.py`**.
-3. Set the Python version to **3.12**. Dependencies come from
-   `uv.lock` / `pyproject.toml` (Community Cloud supports uv). The optional
-   `dense` extra is **not** installed and the auto-seeded profiles
-   (`paragraph` and `clause_aware`) are lexical-only, so the live demo runs on
-   BM25: selecting `dense`/`hybrid` returns a clear `422 profile_not_dense` (a
-   degenerate dense profile would instead return `503 dense_unavailable`), and
-   the Reranking Laboratory returns a clear `503 reranker_unavailable`. Because
-   the extra is absent, dense/hybrid/reranked *evaluation runs* are disabled too
-   — the recorded SciFact and legal experiments still display.
-4. Add these **secrets** in the Cloud app settings:
-
-   ```toml
-   RAG_WORKBENCH_READ_ONLY = "true"
-   RAG_WORKBENCH_AUTOSEED_SAMPLE = "true"
-   # Optional, for the authenticated owner mode (WebAuthn passkey):
-   # RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"
-   # RAG_WORKBENCH_WEBAUTHN_RP_ID = "<the app host, e.g. rag-workbench-xxxx.streamlit.app>"
-   # RAG_WORKBENCH_WEBAUTHN_ORIGINS = '["https://rag-workbench-xxxx.streamlit.app"]'
-   # RAG_WORKBENCH_WEBAUTHN_CREDENTIALS = '<one-item JSON array, saved after bootstrap>'
-   ```
-
-   The passkey is enrolled once through a temporary bootstrap: set
-   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED = "true"` and
-   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN = "<a long random secret>"`, register a
-   passkey in the sidebar's **Owner Mode** panel, paste the returned record into
-   `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS`, then set bootstrap back to `"false"` and
-   delete the token. See §18.
-
-Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
-store reset when the app sleeps or reboots (hence the auto-seed, which also
-fills in a missing demonstration profile after a code upgrade) — and the
-deep-learning dense stack is heavy for the free tier, so BM25-only is the
-default live demo. The committed datasets and recorded artifacts are located by
-finding the repository root (marker: `pyproject.toml` beside `src/rag_workbench`)
-via the module path, the working directory and `sys.path`, so they are still
-found when the package is installed non-editable rather than from the source
-tree.
-
----
-
-## 5. Configuration
-
-All settings are environment variables prefixed `RAG_WORKBENCH_` (see
-`.env.example`). Sensible defaults mean an empty environment works.
-
-| Variable | Default | Meaning |
-|---|---|---|
-| `RAG_WORKBENCH_DATA_DIR` | `data` | Local state directory (SQLite DB + vector store). Git-ignored. |
-| `RAG_WORKBENCH_DATABASE_URL` | SQLite file in `DATA_DIR` | Explicit SQLAlchemy URL. |
-| `RAG_WORKBENCH_MAX_UPLOAD_MB` | `25` | Upload size limit. |
-| `RAG_WORKBENCH_ALLOWED_EXTENSIONS` | `[".txt", ".md", ".markdown", ".pdf"]` | Accepted upload types (JSON array). |
-| `RAG_WORKBENCH_LOG_LEVEL` | `INFO` | Structured JSON log level. |
-| `RAG_WORKBENCH_DEFAULT_COLLECTION` | `default` | Default collection name. |
-| `RAG_WORKBENCH_DEFAULT_CHUNK_STRATEGY` | `paragraph` | `paragraph` or `fixed_token`. |
-| `RAG_WORKBENCH_DEFAULT_MAX_TOKENS` | `220` | Default token budget per chunk. |
-| `RAG_WORKBENCH_DEFAULT_OVERLAP_TOKENS` | `40` | Default overlap tokens. |
-| `RAG_WORKBENCH_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Default embedding model. |
-| `RAG_WORKBENCH_EMBEDDING_DIMENSION` | derived (384 for MiniLM) | Vector dimension; required for unknown models. |
-| `RAG_WORKBENCH_EMBEDDING_REVISION` | unset | Optional model revision. |
-| `RAG_WORKBENCH_EMBEDDING_BATCH_SIZE` | `32` | Encode batch size. |
-| `RAG_WORKBENCH_EMBEDDING_NORMALIZE` | `true` | L2-normalize embeddings. |
-| `RAG_WORKBENCH_VECTOR_DIR_NAME` | `qdrant` | Vector store directory under `DATA_DIR`. |
-| `RAG_WORKBENCH_DENSE_CANDIDATE_K` | `50` | Candidate pool for dense/hybrid. |
-| `RAG_WORKBENCH_RRF_K` | `60` | Reciprocal Rank Fusion constant. |
-| `RAG_WORKBENCH_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L6-v2` | Local cross-encoder for reranking. |
-| `RAG_WORKBENCH_RERANKER_REVISION` | unset | Optional reranker model revision. |
-| `RAG_WORKBENCH_RERANKER_BATCH_SIZE` | `32` | Cross-encoder inference batch size. |
-| `RAG_WORKBENCH_RERANKER_MAX_LENGTH` | derived | Optional max sequence length override. |
-| `RAG_WORKBENCH_RERANK_CANDIDATES` | `20` | Default candidate depth to rerank. |
-| `RAG_WORKBENCH_API_URL` | `http://127.0.0.1:8000` | API base URL used by the Streamlit UI. |
-| `RAG_WORKBENCH_INPROC_HOST` | `127.0.0.1` | Host for the in-process API on a single-process host. |
-| `RAG_WORKBENCH_INPROC_PORT` | `8765` | Port for the in-process API (used when `RAG_WORKBENCH_API_URL` is unset). |
-| `RAG_WORKBENCH_AUTOSEED` | `1` | UI-side sample seeding when the index is empty (`0` disables). |
-| `RAG_WORKBENCH_DEFAULT_CANDIDATE_DEPTH` | `100` | Default candidate-pool depth for evaluation runs. |
-| `RAG_WORKBENCH_DEFAULT_EVAL_K` | `[1, 3, 5, 10]` | Default rank cut-offs reported by evaluation. |
-| `RAG_WORKBENCH_DATASET_DIR_NAME` | `datasets` | Writable dataset root, relative to `DATA_DIR`. |
-| `RAG_WORKBENCH_BUNDLED_DATASETS_DIR` | `datasets` | Committed, bundled datasets shipped with the repo. |
-| `RAG_WORKBENCH_RECORDED_EXPERIMENTS_DIR` | `benchmarks/recorded` | Committed experiment artifacts shown by a read-only deployment. |
-| `RAG_WORKBENCH_READ_ONLY` | `false` | Refuse every mutating endpoint (`403 read_only_mode`). |
-| `RAG_WORKBENCH_AUTOSEED_SAMPLE` | `false` | Trusted startup bootstrap that seeds the sample corpus once (for a fresh read-only instance). |
-| `RAG_WORKBENCH_GENERATION_ENABLED` | `false` | Master switch for live answer generation (`POST /v1/answer`). Off by default; the public demo leaves it off. |
-| `RAG_WORKBENCH_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama endpoint. Only loopback is accepted unless remote is opted in. |
-| `RAG_WORKBENCH_OLLAMA_MODEL` | `qwen2.5:1.5b-instruct` | Model name to request. Never downloaded by the app. |
-| `RAG_WORKBENCH_OLLAMA_TIMEOUT_S` | `120` | Per-request generation timeout. |
-| `RAG_WORKBENCH_OLLAMA_TEMPERATURE` | `0.1` | Sampling temperature. |
-| `RAG_WORKBENCH_OLLAMA_NUM_PREDICT` | `512` | Maximum tokens to generate. |
-| `RAG_WORKBENCH_OLLAMA_SEED` | unset | Optional sampling seed; set it to make repeated requests reproducible. |
-| `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE` | `false` | Explicit opt-in to a non-loopback Ollama endpoint. |
-| `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT` | `v1` | Instruction wording: `v1` (default) or `v2` (status definitions + abstention example; audited, §16). Wording only. |
-| `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
-| `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
-| `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality reports for the read-only demo. |
-| `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED` | `false` | Emergency deployment-level kill switch for the hosted owner evaluation endpoint. Off by default; not part of routine sign-in. |
-| `RAG_WORKBENCH_WEBAUTHN_RP_ID` | unset | Owner Mode relying-party ID (the deployment's hostname). Trusted config, never derived from request headers. |
-| `RAG_WORKBENCH_WEBAUTHN_RP_NAME` | `RAG Workbench` | Human-readable relying-party name shown by the authenticator. |
-| `RAG_WORKBENCH_WEBAUTHN_ORIGINS` | `[]` | Accepted origins for WebAuthn ceremonies (JSON array); a passkey registered for another RP ID is rejected. |
-| `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` | `[]` | Approved **public** credential records (JSON array), saved after one-time bootstrap enrollment. Contains no private key. |
-| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED` | `false` | Temporary one-time enrollment switch. Disable after the passkey is registered. |
-| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN` | unset | Secret authorizing first-time passkey registration only (`X-Bootstrap-Token` header). Compared in constant time; never logged or returned. |
-| `RAG_WORKBENCH_WEBAUTHN_CHALLENGE_TTL_S` | `300` | Maximum age of a single-use WebAuthn challenge. |
-| `RAG_WORKBENCH_WEBAUTHN_MAX_PENDING_CHALLENGES` | `16` | Bound on outstanding challenges. |
-| `RAG_WORKBENCH_WEBAUTHN_SESSION_IDLE_TTL_S` | `900` | Owner session idle timeout (sliding). |
-| `RAG_WORKBENCH_WEBAUTHN_SESSION_ABSOLUTE_TTL_S` | `28800` | Owner session absolute lifetime. |
-| `RAG_WORKBENCH_WEBAUTHN_MAX_SESSIONS` | `8` | Bound on concurrent owner sessions. |
-| `RAG_WORKBENCH_WEBAUTHN_REGISTRATION_MAX_ATTEMPTS` | `5` | Registration attempts allowed per window before `429`. |
-| `RAG_WORKBENCH_WEBAUTHN_AUTHENTICATION_MAX_ATTEMPTS` | `20` | Authentication attempts allowed per window before `429`. |
-| `RAG_WORKBENCH_WEBAUTHN_RATE_WINDOW_S` | `300` | Sliding window for the registration/authentication attempt limits. |
-| `RAG_WORKBENCH_OWNER_ALLOWED_DATASETS` | `["legal-contracts"]` | Bundled datasets a bounded owner evaluation may use (JSON array). |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_QUERIES` | `20` | Server-side cap on queries per owner evaluation. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_CANDIDATE_DEPTH` | `100` | Server-side cap on candidate depth for owner evaluations. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_TOP_K` | `10` | Server-side cap on `top_k` for owner evaluations. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_DOCUMENTS` | `50` | Cap on documents ingested from the trusted fixture before an owner evaluation. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_CONCURRENCY` | `1` | Maximum concurrently running owner evaluation jobs. |
-| `RAG_WORKBENCH_OWNER_EVAL_MAX_RUNTIME_S` | `60` | Wall-clock budget for one owner evaluation; exceeding it raises `422 owner_limit_exceeded`. |
-
----
-
-## 6. Architecture
+### 4.1 Service and data layout
 
 ```text
               Streamlit UI (HTTP only)
@@ -567,13 +185,13 @@ All settings are environment variables prefixed `RAG_WORKBENCH_` (see
                         |
       +-----------------+--------------------------+
       |                                            |
- IngestionService                             SearchService
- (parse -> chunk -> persist -> embed)         (profile -> bm25 | dense | hybrid)
+IngestionService                             SearchService
+(parse -> chunk -> persist -> embed)         (profile -> bm25 | dense | hybrid)
       |                                            |
       v                          +-----------------+------------------+
- SQLAlchemy models ---- SQLite --+                                    |
- (documents, index_profiles,   FTS5 `chunk_fts`        Qdrant local-mode collection
-  chunks, ingestion_jobs)      (triggers)              `rw_<profile_key>`
+SQLAlchemy models ---- SQLite --+                                    |
+(documents, index_profiles,   FTS5 `chunk_fts`        Qdrant local-mode collection
+ chunks, ingestion_jobs)      (triggers)              `rw_<profile_key>`
 ```
 
 The pipeline is explicit and framework-free:
@@ -586,7 +204,7 @@ DocumentParser -> Chunker -> Document/Chunk rows -> FTS5 -> BM25 retrieval
 ```
 
 Interfaces (`src/rag_workbench/domain/interfaces.py`) are `Protocol`s and exist
-only where multiple implementations exist or are planned:
+only where multiple implementations exist:
 
 - `DocumentParser`: bytes + filename → ordered `ParsedBlock`s with provenance.
 - `Chunker`: `ParsedDocument` + `ChunkerConfig` → `ChunkData` list.
@@ -601,25 +219,7 @@ only where multiple implementations exist or are planned:
   inference. Implemented by the Sentence Transformers cross-encoder in production
   and a deterministic fake in tests.
 
-### Index profiles and isolation
-
-An `IndexProfile` is identified by a **config hash** over behaviour-affecting
-fields only. For a lexical profile that is parser version, chunker strategy/params,
-null embedding model/dimension and index version — **byte-for-byte the Phase 1
-identity**, so existing BM25 profiles are not invalidated (locked by a unit test).
-Dense profiles additionally hash the embedding model, dimension, revision,
-similarity metric, normalization and any document/query prefixes. The human name
-is a label, not identity. Consequences:
-
-- Re-ingesting into the same configuration reuses the same profile (idempotent).
-- Different chunking or embedding configurations produce **separate, non-mixing**
-  indexes; incompatible vector representations can never share a collection.
-- Chunk IDs are `uuid5` values derived from `(profile_key, document_id, order)`,
-  deterministic and profile-scoped; they double as Qdrant point IDs, so upserts
-  are idempotent.
-- The vector collection name is `rw_<profile_key>`, derived purely from identity.
-
-### Rank and score conventions
+### 4.2 Rank and score conventions
 
 Every hit exposes a 1-based `rank` where `1` is always best, plus a `score_kind`
 documenting how to read `score`:
@@ -640,7 +240,25 @@ passage moved up). `rerank_score` is a cross-encoder **relevance logit** — lar
 is more relevant, but it is **not** a calibrated probability of relevance. Ties
 are broken deterministically by original retrieval rank and then by chunk ID.
 
-### FTS5 and vector synchronization
+### 4.3 Index profiles and isolation
+
+An `IndexProfile` is identified by a **config hash** over behaviour-affecting
+fields only. For a lexical profile that is parser version, chunker strategy/params,
+null embedding model/dimension and index version — the original BM25 identity, so
+existing BM25 profiles are not invalidated (locked by a unit test). Dense profiles
+additionally hash the embedding model, dimension, revision, similarity metric,
+normalization and any document/query prefixes. The human name is a label, not
+identity. Consequences:
+
+- Re-ingesting into the same configuration reuses the same profile (idempotent).
+- Different chunking or embedding configurations produce **separate, non-mixing**
+  indexes; incompatible vector representations can never share a collection.
+- Chunk IDs are `uuid5` values derived from `(profile_key, document_id, order)`,
+  deterministic and profile-scoped; they double as Qdrant point IDs, so upserts
+  are idempotent.
+- The vector collection name is `rw_<profile_key>`, derived purely from identity.
+
+### 4.4 FTS5 and vector synchronization
 
 `chunk_fts` is an FTS5 **external-content** table backed by `chunks`
 (`content_rowid = 'id'`). Three triggers (`INSERT`, `UPDATE`, `DELETE`) mirror
@@ -658,17 +276,15 @@ The vector index is a *derived* structure kept in sync by the application:
   `missing_points` and `orphan_points`; `rebuild-vectors` regenerates the whole
   collection purely from SQLite (no re-upload or re-parse).
 
-### Schema migrations
+### 4.5 Schema migrations
 
-Phase 2 added one column (`index_profiles.embedding_params`) and Phase 3 adds
-clause provenance columns to `chunks` (`section_number`, `section_title`,
-`parent_clause`, `section_level`, `diagnostics`). Schema creation applies
-**additive** `ALTER TABLE ... ADD COLUMN` migrations, so a Phase 1 or Phase 2
-database keeps every document, chunk and profile (covered by tests).
+Schema changes are **additive**: `index_profiles.embedding_params` and the clause
+provenance columns on `chunks` (`section_number`, `section_title`, `parent_clause`,
+`section_level`, `diagnostics`) were added with `ALTER TABLE ... ADD COLUMN`
+migrations, so an older database keeps every document, chunk and profile (covered
+by tests).
 
----
-
-## 7. API
+### 4.6 API endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -779,284 +395,15 @@ documents.
 
 ---
 
-## 8. Testing and quality
+## 5. Evidence and benchmark highlights
 
-```powershell
-uv run ruff check .
-uv run pytest                 # core suite; dense/real-model tests are deselected
-uv run pytest -m dense -s     # opt-in: real Sentence Transformers smoke test
-uv run pytest -m reranker -s  # opt-in: real cross-encoder reranker smoke test
-uv run pytest -m ollama -s    # opt-in: real local-Ollama generation smoke test
-```
+All figures in this section were **measured in this project** on one machine and
+should be read as single-machine observations, not leaderboards. The exact runs
+are committed as artifacts under `benchmarks/recorded/`,
+`benchmarks/recorded_answers/` and `benchmarks/recorded_scaling/` (see
+`benchmarks/README.md`).
 
-The core suite is deterministic and runs **offline** with no model downloads. The
-dense/hybrid/rerank paths are exercised end-to-end with a deterministic fake
-embedding provider and fake reranker over the **real** Qdrant local store and the
-real RRF implementation:
-
-- **Unit:** tokenizer and chunk boundaries; parsers (headings, encoding fallback,
-  empty input, malformed and image-only PDFs, unsupported extensions); the
-  clause-marker detector and clause-aware chunker (hierarchy, grouping, long-clause
-  splitting, definition grouping, overlap bounds, determinism, no content loss);
-  the untrusted-input FTS query builder; configuration and profile identity
-  (including the Phase-1 hash lock and clause-aware isolation); Reciprocal Rank
-  Fusion; the vector store (idempotent upsert, dimension checks, filtering,
-  deletion, persistence across reopen); embedding laziness and dependency
-  handling; reranker wiring and laziness.
-- **Integration:** contract ingestion → exact-clause search with provenance;
-  idempotent re-ingestion; profile isolation; deletion removing relational rows,
-  FTS entries **and** vector points; dense and hybrid search with preserved
-  component ranks; `partial` recovery and rebuild; vector reconciliation of
-  missing and orphan points; clause ingestion + the chunks endpoint; reranking
-  across bm25/dense/hybrid with rank movement, tie-breaking, `rerank_candidates`
-  validation, truncation diagnostics and `reranker_unavailable`; the Phase-1 → 2
-  and Phase-2 → 3 additive schema migrations; the full HTTP round-trip with the
-  same error mapping.
-- **Evaluation:** hand-computed IR metrics (recall/precision/MRR/nDCG/MAP and
-  candidate-pool recall) against known rankings; the dataset schemas, checksums,
-  BEIR parsing and the two relevance-mapping policies; the bundled synthetic
-  legal dataset's integrity; document-level and evidence-level evaluation
-  end-to-end over real SQLite/BM25; experiment persistence plus JSON/CSV export
-  round-trips; and the evaluation API and read-only enforcement (a mutating
-  endpoint returns `403 read_only_mode`).
-- **Answer (Phase 5):** context selection (sequential `[S#]` ids, duplicate and
-  containment de-duplication, `max_evidence` and token-budget exclusion with an
-  explicit reason for every dropped passage); deterministic citation verification
-  (unknown ids, uncited claims, `answered`-without-citations, **strict citation
-  parsing** so a string merely *containing* an id is rejected as malformed, and the
-  semantic-support and answer-vs-claims properties always reported `not_determined`);
-  reference-evidence coverage (`never_retrieved` / `retrieved_but_excluded` /
-  `included`, with partial vs. complete coverage kept distinct); the prompt trust
-  boundary and both instruction variants (retrieved text appears only in the
-  delimited user message, never in the trusted system instructions); the Ollama
-  adapter over an in-memory HTTP transport (model listing, availability, schema-valid
-  parsing, code-fence recovery, malformed / HTTP-error / timeout error results, and
-  remote-endpoint refusal); the recorded-artifact loader (demos and multiple quality
-  reports); the grounded-answer quality runner and its aggregation; and the API —
-  grounded answer, unknown-citation flagging, `generation_error`, `503` when
-  generation is disabled or unavailable, `403 read_only_mode`, empty-evidence
-  abstention, and the recorded demos / quality / quality-reports endpoints.
-- **Laboratory Controls:** the three-state capability block on `/v1/config`
-  (each capability reports `available` / `permitted` with a reason, and never a
-  session toggle — so session state cannot be confused with a deployment
-  permission); the server-side owner policy (default clamping to the bounds, BM25
-  forcing, dataset allowlist, and rejection of over-limit queries / depth / top-k
-  and a second concurrent job); owner authorization (feature disabled → `403`,
-  no session → `401`); passkey authentication (bootstrap required to register,
-  single-use challenge replay rejected, a wrong origin rejected, logout revokes);
-  a bounded owner evaluation running **real** BM25 over the bundled fixture on an
-  otherwise read-only deployment; and that no request — including refused
-  mutations — mutates the deployment's permissions or leaks the bootstrap secret,
-  public key or session token.
-- **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
-  profile for the sample contract and returns the expected top clause.
-- **Reranker (opt-in, `-m reranker`):** the real
-  `cross-encoder/ms-marco-MiniLM-L6-v2` model reranks a real candidate list,
-  keeping retrieval and rerank scores separate and reporting its own timings.
-- **Ollama (opt-in, `-m ollama`):** the real local model answers a question over a
-  real ingested contract and the reply passes structural and citation verification
-  (skipped when Ollama or the model is unavailable).
-
-Run the tests to see the current numbers on your machine; this README does not
-pin a pass count.
-
----
-
-## 9. Chunking strategies
-
-Three strategies are implemented:
-
-- **`fixed_token`** — sliding token windows of `max_tokens` with `overlap_tokens`
-  overlap. Windows never cross a parsed block boundary, so page and section
-  provenance stay exact.
-- **`paragraph`** (default) — recursive/paragraph-aware packing: whole paragraphs
-  are packed up to the budget, a paragraph that alone exceeds the budget is
-  split with fixed windows, and a bounded trailing-token overlap is carried into
-  the next chunk. Chunks never span a section boundary.
-- **`clause_aware`** — structure-aware chunking for English legal documents. It
-  recognises numbered sections (`2.1`, `2.1.3`), `(a)` subsections, `ARTICLE IV`,
-  `SCHEDULE` / `ANNEX` / `APPENDIX` / `EXHIBIT` headings and definition entries
-  (`"Term" means ...`); groups the paragraphs that belong to one clause while they
-  fit the budget; splits a long clause with fixed windows while keeping its parent
-  identity; carries a bounded overlap only *within* the same clause; and records
-  `section_number`, `section_title`, `parent_clause` and `section_level` when they
-  can be derived. A heading line that would otherwise become a heading-only chunk
-  is merged with the content that follows; if it cannot be, it is kept with a
-  diagnostic rather than dropped. Detection is conservative (a stray number, date,
-  amount or lowercase continuation is not a heading), deterministic and
-  model-free — it is a structural **heuristic**, not a contract interpreter, and
-  unrecognised text is never discarded.
-
-`clause_aware` has its own profile identity (the strategy is part of the config
-hash), so it shares no chunks or vectors with `paragraph`/`fixed_token`.
-
-### What "token" means here
-
-Token counting uses a **regex word tokenizer** (`\w+` plus individual
-punctuation marks). It is a real, deterministic unit that requires no download,
-so chunk boundaries are reproducible and testable offline. It is **not** the
-same as a BPE tokenizer such as GPT's `tiktoken` or a Llama tokenizer, so
-token counts will differ from those models. The embedding model applies its own
-tokenizer at encode time; inputs longer than the model's sequence limit are
-counted and reported as a diagnostic rather than silently truncated without
-notice. Character counts are never used as token counts.
-
----
-
-## 10. Limitations and non-goals
-
-- **SQLite, single writer.** Concurrency is limited to one writer process; there
-  are no distributed transactions, job queue or public-facing authentication.
-  This is a local prototype.
-- **Vector store is single-owner.** Qdrant *local mode* takes an exclusive lock on
-  its storage directory, so one process owns `data/qdrant` at a time. The process
-  caches one client per path and closes it on shutdown. Running the API and a
-  simultaneous ingest CLI against the same `DATA_DIR` is not supported; treat the
-  running API as the owner and drive ingestion through it.
-- **Model download and load cost.** The first dense ingest downloads the model
-  (one time, cached by Hugging Face); the first reranked search downloads the
-  cross-encoder (one time). Loading either model is the dominant first-call
-  latency; the API keeps them warm in-process, while each CLI invocation reloads
-  them, so CLI timings include model load. `timings_ms.rerank_init` reports the
-  one-off initialization separately from steady-state `rerank_inference`.
-- **Dense indexing is in-process and sequential.** There is no background worker
-  or queue; a very large corpus would block the request. Rebuild batches are
-  bounded for memory, not run in parallel.
-- **Cosine only.** The vector store is created with cosine distance; other
-  metrics are rejected rather than silently ignored.
-- **No OCR.** Scanned/image-only PDFs yield zero blocks plus a diagnostic; no
-  text is invented. Table extraction is not attempted.
-- **Heading detection is heuristic.** Markdown ATX headings and a conservative
-  numbered-heading pattern (`2.1 Definitions`); it is not a universal contract
-  parser. Ambiguous parses surface as `section_path = None` rather than a guess.
-  The `clause_aware` chunker adds its own conservative marker detection on top of
-  the parser but is still a heuristic.
-- **`section_path` is not OCR'd from layout** and page numbers are unknown
-  (`None`) for plain text, where the concept does not apply.
-- **Reranker scores are logits, not probabilities.** A cross-encoder produces an
-  unbounded relevance logit; it orders candidates well but is not a calibrated
-  confidence and should not be read as a percentage. The default reranker is a
-  small English MS MARCO model, so non-English and highly technical clauses are
-  out of its training distribution.
-- **Migrations are additive only.** New nullable columns are added automatically;
-  destructive or type-changing migrations are not yet handled (no Alembic).
-- **Uploads are processed in memory** up to the size limit; there is no
-  streaming ingest path yet.
-- **Optional answer generation is local, small and non-deterministic.** Live
-  generation needs a separately installed Ollama; the app never downloads a model.
-  Answers come from the configured local model and are **not** guaranteed correct:
-  the pipeline verifies *structure* and *citation ids* deterministically but cannot
-  verify that a cited passage *semantically supports* a claim, so
-  `semantic_support` is always reported as `not_determined`. A small model can
-  answer a question the passages do not support (see §16), add unsupported claims,
-  or — as observed with 1.5B Qwen — fail citation-id formatting unless the output
-  schema constrains it (the schema now uses a `pattern` so decoding emits `S#`). Its
-  abstention behaviour is also **not stable**: the same prompt and configuration can
-  abstain on one run and not another (§16), so a single recorded number is a draw,
-  not a property.
-  Generation is refused in read-only mode and when disabled, so the public demo is
-  not a model endpoint. Prompt-based defences reduce, but do not eliminate,
-  prompt-injection risk from retrieved text.
-- **Scalability measurements are single-node and synthetic.** The performance
-  harness measures the *current prototype* on one machine over a generated corpus;
-  the numbers characterise cost, not relevance, and are not a production
-  throughput claim. Each recorded artifact names its code revision and whether the
-  working tree was clean, so a dirty-tree run is never presented as a clean
-  revision. The 10M-document capacity model is **deterministic arithmetic over
-  stated assumptions**, not a simulation: its default throughput and overhead
-  values are labelled `assumed`, and `keeps_up` is a conditional projection, not a
-  demonstrated capability. Process memory is only measured when `psutil` is
-  installed; otherwise RSS is reported as not measured and the Python-heap peak is
-  never extrapolated to it. The proposed distributed architecture is **design
-  only** — none of PostgreSQL, a distributed lexical engine, a queue or a Qdrant
-  server is implemented or required. Dense/hybrid/rerank scaling is not measured.
-  Load testing targets a **locally controlled** server, never the public demo, and
-  reports smoke-level HTTP/API throughput, not generation throughput.
-- `/v1/search` rejects unknown `mode` values with a clear message rather than
-  pretending to support them.
-- **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
-  **stored datasets** with explicit relevance judgments; they are not a
-  leaderboard and the bundled legal set is a small synthetic fixture, not a
-  legal-validity benchmark. SciFact is the only external benchmark imported, and
-  its retrieval depth is a **chunk** count, so a document-level metric at K may
-  need a deeper chunk pool than K (reported separately as candidate-pool recall).
-  Diagnostic categories are rule-based over observable evidence and fall back to
-  `unresolved` rather than inferring a cause; a diagnosis is a navigation aid,
-  not a verified root cause.
-- **BM25 term combination matters.** The interactive default is `and` (every
-  term must appear), which is brittle for long natural-language queries; the
-  evaluation default is `or`. The measured difference is reported in
-  §15 and is a property of this lexical stack, not a universal BM25 result.
-
----
-
-## 11. Repository layout
-
-```text
-src/rag_workbench/
-  config.py            Settings + index-profile identity
-  embeddings.py        Sentence Transformers provider (lazy) + factory
-  reranking.py         Cross-encoder reranker (lazy) + factory
-  logging_config.py    Structured JSON logging
-  cli.py               rag-workbench CLI
-  domain/              schemas, Protocol interfaces, typed errors
-  persistence/         SQLAlchemy models, engine, FTS5 schema, vector store
-  ingestion/           parsers, chunkers (incl. clause-aware), pipeline, vector indexer
-  retrieval/           BM25, dense, hybrid (RRF), retrieval service (+ rerank stage)
-  evaluation/          metrics, datasets, diagnostics, runner, experiments, service
-  answering/           context selection, prompt trust boundary (v1/v2 variants),
-                       Ollama adapter, citation verification, reference-evidence
-                       coverage, pipeline, quality eval, recorded artifacts
-  scaling/             synthetic corpus generator, performance harness, capacity
-                       model, load-testing harness, architecture design data,
-                       recorded-benchmark loading, application service
-  api/                 FastAPI factory, dependencies, routes
-ui/streamlit_app.py    Thin HTTP client
-ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
-datasets/              Committed evaluation datasets (bundled legal-contracts,
-                       answer-quality set)
-docs/                  scaling_to_10m.md (10M-document design), case_studies.md
-benchmarks/recorded/   Committed experiment artifacts for the read-only demo
-benchmarks/recorded_answers/  Committed recorded answer demos + quality reports
-benchmarks/recorded_scaling/  Committed scalability baselines (Phase 6)
-benchmarks/load/       Optional Locust load-test definition
-tests/                 unit + integration tests, tiny redistributable fixtures
-.github/workflows/ci.yml
-```
-
----
-
-## 12. Roadmap
-
-- **Phase 2 (done):** local Sentence Transformers embeddings, Qdrant-local
-  persistence, dense search, RRF hybrid, profile isolation and stage timings.
-- **Phase 3 (done):** clause-aware legal chunker, local cross-encoder reranking,
-  rank-comparison UI (Chunking and Reranking Laboratories), reranker latency
-  reporting.
-- **Phase 4 (done):** BEIR SciFact import with document-level qrels, a curated
-  synthetic legal set with clause/evidence-level relevance, pure-Python IR
-  metrics, candidate-pool **and** ranking recall, rule-based failure diagnostics,
-  persisted experiments with JSON/CSV export, the Evaluation Lab / Failure
-  Explorer / Performance Lab, a read-only demo mode over committed artifacts, and
-  a corrected matched reranking comparison (§15).
-- **Phase 5 (done):** optional local Ollama answer generation over the retrieved
-  passages, with a strict answer schema, a prompt trust boundary, deterministic
-  citation verification, first-class `insufficient_evidence` / `generation_error`
-  states, retrieved-vs-selected context, an **Answer Laboratory** UI page, a CLI
-  `answer` command group, a committed grounded-answer quality set and report, and
-  recorded answer artifacts for the read-only demo.
-- **Phase 6 (done):** a bounded local **performance harness** over a deterministic
-  synthetic corpus, a **deterministic capacity model** with explicit bases, a
-  **lightweight load-testing harness** (plus an optional Locust definition),
-  committed scaling baselines, a **Scalability Laboratory** Streamlit page, and a
-  documented design for ~10M documents that preserves the retrieval interfaces
-  (`docs/scaling_to_10m.md`, `docs/case_studies.md`).
-- **Later (optional):** a hosted dense/reranker benchmark, and a real distributed
-  prototype behind the existing Protocols. Neither is claimed as built.
-
----
-
-## 13. Observed Phase 2 results (sample contract)
+### 5.1 Dense and hybrid retrieval (sample contract)
 
 Measured on Windows with the bundled `tests/fixtures/sample_contract.txt`
 (8 paragraph chunks), `sentence-transformers/all-MiniLM-L6-v2` (384-d), Qdrant
@@ -1076,9 +423,23 @@ observations, not a benchmark.
   steady-state per-query `vector_search` was ~1–2.5 ms and fusion ~0.04 ms on this
   machine. BM25 `retrieval` was ~1–4 ms.
 
----
+Example dense output (real MiniLM run):
 
-## 14. Observed Phase 3 results (legal fixture)
+```
+query='termination for convenience' mode=dense profile=p-fd18e21e2a5b3664 hits=3
+  #1 cosine=0.4360 sample_contract.txt | 3. Term and Termination > 3.1 Termination for Convenience
+  #2 cosine=0.4343 sample_contract.txt | 3. Term and Termination > 3.2 Termination for Cause
+  #3 cosine=0.1460 sample_contract.txt | 2. Fees and Payment > 2.1 Payment Terms
+```
+
+Example hybrid output (component ranks preserved):
+
+```
+  #1 rrf=0.0328 sample_contract.txt | ... 3.1 Termination for Convenience [bm25_rank=1 dense_rank=1]
+  #2 rrf=0.0161 sample_contract.txt | ... 3.2 Termination for Cause         [bm25_rank=None dense_rank=2]
+```
+
+### 5.2 Clause-aware chunking and cross-encoder reranking (legal fixture)
 
 Measured on Windows with the synthetic `tests/fixtures/legal_contract.txt`,
 `cross-encoder/ms-marco-MiniLM-L6-v2`, query `confidential information`. These
@@ -1099,21 +460,26 @@ are single-machine smoke observations, not a benchmark.
   `(query, passage)` pairs; `lexical` was `0.4 ms`. The API keeps the loaded model
   warm, so later reranked queries pay inference only.
 
----
+Example rerank output (real cross-encoder, clause-aware profile):
 
-## 15. Observed Phase 4 results (SciFact + synthetic legal set)
+```
+  #1 rerank=10.227 ... 1.1 "Confidential Information" [retrieval_rank=1 movement=0]
+  #2 rerank=5.505  ... 4.1 Confidentiality            [retrieval_rank=3 movement=+1]
+  #3 rerank=1.919  ... 3.3(b) Return of Materials     [retrieval_rank=2 movement=-1]
+```
 
-These figures were **measured in this project** on one Windows machine (CPU),
-Python 3.12, with `sentence-transformers/all-MiniLM-L6-v2` (384-d) and
+### 5.3 Retrieval evaluation (SciFact + synthetic legal set)
+
+These figures were measured on one Windows machine (CPU), Python 3.12, with
+`sentence-transformers/all-MiniLM-L6-v2` (384-d) and
 `cross-encoder/ms-marco-MiniLM-L6-v2`. They are single-machine observations, not
 a leaderboard. The exact runs are committed as artifacts in
-`benchmarks/recorded/` (see `benchmarks/README.md`); the artifacts were
-regenerated with record schema `2`, so every number below is reproducible from
-the committed code. Ranking metrics are unchanged from the original Phase 4 run
-where the code is unchanged; latency now covers only the queries that actually
-retrieved (see the note on unjudged queries).
+`benchmarks/recorded/`; the artifacts were regenerated with record schema `2`, so
+every number below is reproducible from the committed code. Ranking metrics are
+unchanged from the original run where the code is unchanged; latency now covers
+only the queries that actually retrieved (see the note on unjudged queries).
 
-### SciFact (BEIR, document-level)
+#### SciFact (BEIR, document-level)
 
 The **full** SciFact corpus (5183 documents) is chunked with the `paragraph`
 profile (9050 chunks) and evaluated on the 300 test claims that carry judgments.
@@ -1137,12 +503,12 @@ depth 100.
 - `candidate_recall@100` (0.87–0.94) bounds what any reranker could achieve from
   that pool: reranking can only reorder, never recover.
 
-### Matched reranking (SciFact, same 20-passage pool)
+#### Matched reranking (SciFact, same 20-passage pool)
 
 To compare fairly, the baseline and the reranked run start from the **identical**
-20-chunk first-stage pool (this is the correction required by the phase spec: the
-baseline is the first-stage ranking of the *same* candidates, so a passage the
-reranker "finds" cannot have been absent from the pool). Both runs use BM25
+20-chunk first-stage pool (the baseline is the first-stage ranking of the *same*
+candidates, so a passage the reranker "finds" cannot have been absent from the
+pool). Both runs use BM25
 (`or`), `top_k=10`, chunk depth 20, with `rerank_candidates == candidate_depth ==
 20`; candidate recall is measured on an independent rerank-free retrieval of the
 same pool, so it matches between the two rows by construction.
@@ -1162,7 +528,7 @@ cross-encoder inference averaged ~677 ms per query for 20 candidates
 (p50 670 ms, p95 812 ms) after a one-time ~18.3 s model load, so it is worth its
 quality gain only when ranking quality matters more than latency.
 
-### Legal chunking comparison (bundled synthetic set, evidence-level)
+#### Legal chunking comparison (bundled synthetic set, evidence-level)
 
 The bundled `datasets/legal-contracts` set (7 synthetic contracts, 48
 natural-language queries, 65 clause/evidence units) is evaluated with
@@ -1183,7 +549,7 @@ evidence text or matches its section number, so these numbers are sensitive to
 exact chunk boundaries; both profiles are measured on the same corpus and
 judgments.)
 
-### BM25 term combination (`and` vs `or`)
+#### BM25 term combination (`and` vs `or`)
 
 The same legal set sizes the effect of lexical term combination:
 
@@ -1198,9 +564,7 @@ property of this lexical stack, reported rather than hidden; the interactive
 default stays `and` for backward-compatible exact-phrase behaviour, and
 evaluation defaults to `or`.
 
----
-
-## 16. Observed Phase 5 results (grounded answers)
+### 5.4 Grounded answers
 
 **This section reports a run actually performed on this machine.** Generation uses
 a *local* model served by Ollama; it is a single-machine smoke observation, not a
@@ -1224,7 +588,7 @@ the raw per-question answer demos. The API exposes the newest report at
 `/v1/answer-quality` and the full comparison list at `/v1/answer-quality-reports`,
 which the Answer Laboratory renders as a table.
 
-### The original committed run (`aq-20261015T225614`, `max_evidence=4`)
+#### The original committed run (`aq-20261015T225614`, `max_evidence=4`)
 
 | Metric | Value |
 |---|---|
@@ -1243,7 +607,7 @@ runs (`modified_at` moved from 2026-10-15 to 2026-10-16), so the original `0.00`
 recorded here as **one non-reproducible draw**, not a stable property of the
 pipeline. Both the original and the re-runs are kept as committed artifacts.
 
-### Evidence-loss audit: why `aq-002` was answered wrongly
+#### Evidence-loss audit: why `aq-002` was answered wrongly
 
 `aq-002` asks two things — the invoicing period **and** the late-payment interest.
 It is the interesting failure: the late-payment clause (`msa-02::3.2`, containing
@@ -1252,7 +616,7 @@ context**, while the invoicing clause reached the model. The old metric only ask
 "was *any* reference keyword present?", so it reported full coverage (1.00) and hid
 the loss.
 
-Coverage is now computed per required evidence unit and classified three ways
+Coverage is computed per required evidence unit and classified three ways
 (`src/rag_workbench/answering/reference.py`): **`included`** (every required anchor
 reached the context), **`retrieved_but_excluded`** (retrieved but dropped by
 `max_evidence` or the token budget) and **`never_retrieved`** (absent from the whole
@@ -1268,7 +632,7 @@ pool). Complete and partial coverage are reported separately:
 `aq-002` is likewise visible at runtime: its `evidence_excluded_by_max` diagnostic
 now names the dropped passages instead of reporting a bare count.
 
-### Controlled configuration comparison
+#### Controlled configuration comparison
 
 Configurations recorded with a fixed `seed=0` (unseeded repeats of the same
 config agreed, so the differences below are configuration effects, not sampling
@@ -1304,7 +668,7 @@ What this shows:
 - **Coverage is not correctness.** See `aq-007` below: complete coverage can coexist
   with a wrong answer.
 
-### Preserved failure: `aq-007` (citation resolves, but does not support)
+#### Preserved failure: `aq-007` (citation resolves, but does not support)
 
 `aq-007` asks the NDA's governing law **and** a disaster-recovery objective. The
 correct first part is *Delaware*, and the Delaware clause (`nda-01::8`) **was**
@@ -1322,7 +686,7 @@ completeness is likewise split into mechanical properties (every id resolves, ev
 claim is cited) and a `not_determined` "answer text vs. structured claims"
 consistency property that is never asserted automatically.
 
-### Latency (single machine, CPU, 1.5B Q8)
+#### Latency (single machine, CPU, 1.5B Q8)
 
 | Stage | p50 (recommended run) |
 |---|---|
@@ -1333,9 +697,7 @@ consistency property that is never asserted automatically.
 First-call latency is higher because the model is loaded on demand. Run
 `rag-workbench answer record` to reproduce with your own model.
 
----
-
-## 17. Observed Phase 6 results (scalability baselines)
+### 5.5 Scalability baselines
 
 Measured by `rag-workbench scaling run` on one machine (Windows 11, Python 3.13.5,
 16 logical cores, AMD64) over a deterministic synthetic corpus (seed 0), committed
@@ -1388,18 +750,239 @@ endpoints** (`docs/scaling_to_10m.md` §8.2), not RAG generation throughput.
 - Dense, hybrid and reranked scaling were **not** measured (they need the optional
   `dense` extra and local model weights).
 
+### 5.6 Interpretation and case studies
+
+The recorded measurements above are analysed, with their root causes and residual
+risks, in two companions:
+
+- [`docs/case_studies.md`](docs/case_studies.md) — eight concrete failures and
+  design traps (chunk-count surprises, `or`-query BM25 cost, a malformed-citation
+  parser, an unstable abstention draw, optional-dependency degradation,
+  candidate-depth semantics, a wrong code revision in a benchmark, and a
+  mislabelled memory reading), each grounded in a committed artifact.
+- [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md) — the **design** case study
+  for ~10 million documents: measured baselines, single-node extrapolations, a
+  basis-labelled capacity model, a target architecture and its migration path, and
+  an explicit list of what remains unknown.
+
 ---
 
-## 18. Owner Mode authentication (WebAuthn / passkey)
+## 6. Installation and local setup
+
+### 6.1 Requirements
+
+- **Python 3.12** (3.11 is likely fine but is not tested here).
+- **uv** — https://docs.astral.sh/uv/ — for environment and dependency
+  management.
+- Windows PowerShell is the documented shell; the commands are equivalent on
+  macOS/Linux.
+
+**BM25-only use needs no model, no download and no network.** Dense and hybrid
+retrieval need the optional `dense` extra and download the embedding model
+once (about 90 MB). **Cross-encoder reranking** needs the same `dense` extra and
+downloads the reranker model once on first use (about 90 MB). **Answer generation**
+is optional and needs a **separately installed local Ollama** with one model
+pulled or imported; with no Ollama the rest of the project is unaffected. The core
+install, the tests and the default demo need no Docker, cloud account, API key or
+GPU. The **scalability tools** (synthetic corpus generator, performance harness,
+capacity model and built-in load-test harness) are part of the core install;
+Locust (`load` extra) and `psutil` (`profiling` extra) are optional extras, or can
+be used ad hoc via `uv run --with ...`.
+
+### 6.2 Setup (Windows PowerShell)
+
+```powershell
+# 1. Install uv if you do not have it
+#    (see https://docs.astral.sh/uv/getting-started/installation/)
+
+# 2. From the repository root, create the environment and install core dependencies
+uv sync
+
+# 2b. OPTIONAL: add dense retrieval and cross-encoder reranking
+#     (Sentence Transformers + torch, CPU build)
+uv sync --extra dense
+
+# 3. Optional: copy the example configuration
+Copy-Item .env.example .env
+
+# 4. Create the SQLite schema + FTS5 index
+uv run rag-workbench init-db
+```
+
+`uv sync` creates an isolated `.venv` from `pyproject.toml` / `uv.lock`. The core
+install deliberately excludes deep-learning packages so that BM25 and the test
+suite stay light and offline.
+
+Optional extras:
+
+```powershell
+uv sync --extra load          # Locust, for the optional load-test definition
+uv sync --extra profiling     # psutil -> the harness records process RSS
+```
+
+### 6.3 Optional: enable answer generation (local Ollama)
+
+Generation is off by default. To turn it on you need a **local** Ollama serving one
+model. Install Ollama from https://ollama.com/download (a signed Windows installer),
+then either pull a model or *import* an existing GGUF without downloading it:
+
+```powershell
+# Option A: pull a small model (network, ~1 GB)
+ollama pull qwen2.5:1.5b-instruct
+
+# Option B: import a GGUF you already have (no download)
+#   create a Modelfile whose first line is:  FROM C:\path\to\model.gguf
+ollama create qwen2.5:1.5b-instruct -f .\Modelfile
+
+# Start the server if it is not already running
+ollama serve
+
+# Point RAG Workbench at it and enable generation
+$env:RAG_WORKBENCH_GENERATION_ENABLED = "true"
+$env:RAG_WORKBENCH_OLLAMA_MODEL = "qwen2.5:1.5b-instruct"
+```
+
+Only a **loopback** Ollama endpoint is accepted by default; a remote base URL
+requires the explicit `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE=true` opt-in. Nothing is
+downloaded at app start-up.
+
+### 6.4 Run it
+
+Start the API (first terminal):
+
+```powershell
+uv run rag-workbench serve
+# or, equivalently:
+uv run uvicorn --factory rag_workbench.api.app:create_app --reload
+```
+
+API docs: http://127.0.0.1:8000/docs — health check: http://127.0.0.1:8000/health
+
+Start the UI (second terminal):
+
+```powershell
+uv run streamlit run ui/streamlit_app.py
+```
+
+### 6.5 Configuration
+
+All settings are environment variables prefixed `RAG_WORKBENCH_` (see
+`.env.example`). Sensible defaults mean an empty environment works.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RAG_WORKBENCH_DATA_DIR` | `data` | Local state directory (SQLite DB + vector store). Git-ignored. |
+| `RAG_WORKBENCH_DATABASE_URL` | SQLite file in `DATA_DIR` | Explicit SQLAlchemy URL. |
+| `RAG_WORKBENCH_MAX_UPLOAD_MB` | `25` | Upload size limit. |
+| `RAG_WORKBENCH_ALLOWED_EXTENSIONS` | `[".txt", ".md", ".markdown", ".pdf"]` | Accepted upload types (JSON array). |
+| `RAG_WORKBENCH_LOG_LEVEL` | `INFO` | Structured JSON log level. |
+| `RAG_WORKBENCH_DEFAULT_COLLECTION` | `default` | Default collection name. |
+| `RAG_WORKBENCH_DEFAULT_CHUNK_STRATEGY` | `paragraph` | `paragraph` or `fixed_token`. |
+| `RAG_WORKBENCH_DEFAULT_MAX_TOKENS` | `220` | Default token budget per chunk. |
+| `RAG_WORKBENCH_DEFAULT_OVERLAP_TOKENS` | `40` | Default overlap tokens. |
+| `RAG_WORKBENCH_EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Default embedding model. |
+| `RAG_WORKBENCH_EMBEDDING_DIMENSION` | derived (384 for MiniLM) | Vector dimension; required for unknown models. |
+| `RAG_WORKBENCH_EMBEDDING_REVISION` | unset | Optional model revision. |
+| `RAG_WORKBENCH_EMBEDDING_BATCH_SIZE` | `32` | Encode batch size. |
+| `RAG_WORKBENCH_EMBEDDING_NORMALIZE` | `true` | L2-normalize embeddings. |
+| `RAG_WORKBENCH_VECTOR_DIR_NAME` | `qdrant` | Vector store directory under `DATA_DIR`. |
+| `RAG_WORKBENCH_DENSE_CANDIDATE_K` | `50` | Candidate pool for dense/hybrid. |
+| `RAG_WORKBENCH_RRF_K` | `60` | Reciprocal Rank Fusion constant. |
+| `RAG_WORKBENCH_RERANKER_MODEL` | `cross-encoder/ms-marco-MiniLM-L6-v2` | Local cross-encoder for reranking. |
+| `RAG_WORKBENCH_RERANKER_REVISION` | unset | Optional reranker model revision. |
+| `RAG_WORKBENCH_RERANKER_BATCH_SIZE` | `32` | Cross-encoder inference batch size. |
+| `RAG_WORKBENCH_RERANKER_MAX_LENGTH` | derived | Optional max sequence length override. |
+| `RAG_WORKBENCH_RERANK_CANDIDATES` | `20` | Default candidate depth to rerank. |
+| `RAG_WORKBENCH_API_URL` | `http://127.0.0.1:8000` | API base URL used by the Streamlit UI. |
+| `RAG_WORKBENCH_INPROC_HOST` | `127.0.0.1` | Host for the in-process API on a single-process host. |
+| `RAG_WORKBENCH_INPROC_PORT` | `8765` | Port for the in-process API (used when `RAG_WORKBENCH_API_URL` is unset). |
+| `RAG_WORKBENCH_AUTOSEED` | `1` | UI-side sample seeding when the index is empty (`0` disables). |
+| `RAG_WORKBENCH_DEFAULT_CANDIDATE_DEPTH` | `100` | Default candidate-pool depth for evaluation runs. |
+| `RAG_WORKBENCH_DEFAULT_EVAL_K` | `[1, 3, 5, 10]` | Default rank cut-offs reported by evaluation. |
+| `RAG_WORKBENCH_DATASET_DIR_NAME` | `datasets` | Writable dataset root, relative to `DATA_DIR`. |
+| `RAG_WORKBENCH_BUNDLED_DATASETS_DIR` | `datasets` | Committed, bundled datasets shipped with the repo. |
+| `RAG_WORKBENCH_RECORDED_EXPERIMENTS_DIR` | `benchmarks/recorded` | Committed experiment artifacts shown by a read-only deployment. |
+| `RAG_WORKBENCH_READ_ONLY` | `false` | Refuse every mutating endpoint (`403 read_only_mode`). |
+| `RAG_WORKBENCH_AUTOSEED_SAMPLE` | `false` | Trusted startup bootstrap that seeds the sample corpus once (for a fresh read-only instance). |
+| `RAG_WORKBENCH_GENERATION_ENABLED` | `false` | Master switch for live answer generation (`POST /v1/answer`). Off by default; the public demo leaves it off. |
+| `RAG_WORKBENCH_OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Ollama endpoint. Only loopback is accepted unless remote is opted in. |
+| `RAG_WORKBENCH_OLLAMA_MODEL` | `qwen2.5:1.5b-instruct` | Model name to request. Never downloaded by the app. |
+| `RAG_WORKBENCH_OLLAMA_TIMEOUT_S` | `120` | Per-request generation timeout. |
+| `RAG_WORKBENCH_OLLAMA_TEMPERATURE` | `0.1` | Sampling temperature. |
+| `RAG_WORKBENCH_OLLAMA_NUM_PREDICT` | `512` | Maximum tokens to generate. |
+| `RAG_WORKBENCH_OLLAMA_SEED` | unset | Optional sampling seed; set it to make repeated requests reproducible. |
+| `RAG_WORKBENCH_OLLAMA_ALLOW_REMOTE` | `false` | Explicit opt-in to a non-loopback Ollama endpoint. |
+| `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT` | `v1` | Instruction wording: `v1` (default) or `v2` (status definitions + abstention example; audited, §5.4). Wording only. |
+| `RAG_WORKBENCH_ANSWER_MAX_EVIDENCE` | `6` | Maximum passages selected into the model context. |
+| `RAG_WORKBENCH_ANSWER_CONTEXT_TOKENS` | `2048` | Token budget for the evidence block. |
+| `RAG_WORKBENCH_RECORDED_ANSWERS_DIR` | `benchmarks/recorded_answers` | Committed recorded answer demos + quality reports for the read-only demo. |
+| `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED` | `false` | Emergency deployment-level kill switch for the hosted owner evaluation endpoint. Off by default; not part of routine sign-in. |
+| `RAG_WORKBENCH_WEBAUTHN_RP_ID` | unset | Owner Mode relying-party ID (the deployment's hostname). Trusted config, never derived from request headers. |
+| `RAG_WORKBENCH_WEBAUTHN_RP_NAME` | `RAG Workbench` | Human-readable relying-party name shown by the authenticator. |
+| `RAG_WORKBENCH_WEBAUTHN_ORIGINS` | `[]` | Accepted origins for WebAuthn ceremonies (JSON array); a passkey registered for another RP ID is rejected. |
+| `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` | `[]` | Approved **public** credential records (JSON array), saved after one-time bootstrap enrollment. Contains no private key. |
+| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED` | `false` | Temporary one-time enrollment switch. Disable after the passkey is registered. |
+| `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN` | unset | Secret authorizing first-time passkey registration only (`X-Bootstrap-Token` header). Compared in constant time; never logged or returned. |
+| `RAG_WORKBENCH_WEBAUTHN_CHALLENGE_TTL_S` | `300` | Maximum age of a single-use WebAuthn challenge. |
+| `RAG_WORKBENCH_WEBAUTHN_MAX_PENDING_CHALLENGES` | `16` | Bound on outstanding challenges. |
+| `RAG_WORKBENCH_WEBAUTHN_SESSION_IDLE_TTL_S` | `900` | Owner session idle timeout (sliding). |
+| `RAG_WORKBENCH_WEBAUTHN_SESSION_ABSOLUTE_TTL_S` | `28800` | Owner session absolute lifetime. |
+| `RAG_WORKBENCH_WEBAUTHN_MAX_SESSIONS` | `8` | Bound on concurrent owner sessions. |
+| `RAG_WORKBENCH_WEBAUTHN_REGISTRATION_MAX_ATTEMPTS` | `5` | Registration attempts allowed per window before `429`. |
+| `RAG_WORKBENCH_WEBAUTHN_AUTHENTICATION_MAX_ATTEMPTS` | `20` | Authentication attempts allowed per window before `429`. |
+| `RAG_WORKBENCH_WEBAUTHN_RATE_WINDOW_S` | `300` | Sliding window for the registration/authentication attempt limits. |
+| `RAG_WORKBENCH_OWNER_ALLOWED_DATASETS` | `["legal-contracts"]` | Bundled datasets a bounded owner evaluation may use (JSON array). |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_QUERIES` | `20` | Server-side cap on queries per owner evaluation. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_CANDIDATE_DEPTH` | `100` | Server-side cap on candidate depth for owner evaluations. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_TOP_K` | `10` | Server-side cap on `top_k` for owner evaluations. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_DOCUMENTS` | `50` | Cap on documents ingested from the trusted fixture before an owner evaluation. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_CONCURRENCY` | `1` | Maximum concurrently running owner evaluation jobs. |
+| `RAG_WORKBENCH_OWNER_EVAL_MAX_RUNTIME_S` | `60` | Wall-clock budget for one owner evaluation; exceeding it raises `422 owner_limit_exceeded`. |
+
+---
+
+## 7. Authentication and deployment
+
+### 7.1 Public read-only demo
+
+The hosted app is deliberately split between a single Streamlit process and an
+in-process FastAPI backend, because Streamlit Community Cloud runs one Streamlit
+process and cannot run a separate FastAPI process:
+
+- When `RAG_WORKBENCH_API_URL` is unset, `ui/local_backend.py` starts the *same*
+  FastAPI app with uvicorn on `127.0.0.1:8765` inside the Streamlit process; the
+  UI talks to it over HTTP. No retrieval logic moves into the UI.
+- `st.secrets` values named `RAG_WORKBENCH_*` are copied into the environment
+  once, before the in-process API starts, so Cloud configuration needs no shell.
+- The public demo runs in **read-only mode**: set
+  `RAG_WORKBENCH_READ_ONLY=true` and `RAG_WORKBENCH_AUTOSEED_SAMPLE=true`.
+  The backend then refuses every mutating endpoint with `403 read_only_mode`,
+  while a trusted internal startup hook seeds the bundled sample contract so a
+  fresh instance still has something to search. The **Evaluation Lab**,
+  **Failure Explorer**, **Performance Lab** and **Answer Laboratory** show the
+  committed datasets under `datasets/` and the committed artifacts under
+  `benchmarks/recorded/` and `benchmarks/recorded_answers/`. In read-only mode the
+  answer endpoints are refused, so the app is never a model endpoint; live
+  generation additionally requires `RAG_WORKBENCH_GENERATION_ENABLED=true`.
+- The **Deployment diagnostics** expander on the Evaluation Lab reports the
+  backend `version` and its separate build `revision` (plus how it was resolved:
+  `git`, `git-file` or `source-hash`) and compares the revision to the source
+  tree on disk. If a hot reload left an older backend process running, the
+  mismatch appears as a warning instead of the app silently serving stale code.
+- The **Laboratory Controls** panel is per-session and cannot grant a permission
+  the backend refuses. In read-only mode its evaluation/generation/ingestion
+  toggles are disabled and explain why, and the public app still returns `403`
+  for every privileged request.
+
+### 7.2 Owner mode (WebAuthn / passkey)
 
 The hosted app is **read-only for everyone**. The only exception is a small,
 server-bounded BM25 evaluation an operator may run as the *owner* — and that
-boundary is unlocked with a **WebAuthn passkey**, not a shared secret. This
-replaced an earlier scheme that compared a manually entered `X-Owner-Token`; a
-per-visitor passkey is stronger because the private key never leaves the device
-and there is no repository-adjacent secret to copy.
+boundary is unlocked with a **WebAuthn passkey**, not a shared secret. A
+per-visitor passkey is stronger than a shared token because the private key never
+leaves the device and there is no repository-adjacent secret to copy.
 
-### How it works
+How it works:
 
 - **Two ceremonies.** Registration (create) and authentication (get) are the
   standard WebAuthn ceremonies. The browser performs them with trusted same-page
@@ -1425,7 +1008,52 @@ and there is no repository-adjacent secret to copy.
 - **Fail closed.** With no relying party configured, no credential registered, or
   bootstrap disabled, Owner Mode simply cannot unlock and explains why.
 
-### One-time enrollment
+### 7.3 Deploying to Streamlit Community Cloud
+
+1. Push to the repo's `main` branch. Streamlit Cloud **auto-redeploys on every
+   push**.
+2. On <https://share.streamlit.io> → *New app* → repository
+   `deesingsong/RAG-Workbench`, branch `main`, **Main file path
+   `ui/streamlit_app.py`**.
+3. Set the Python version to **3.12**. Dependencies come from
+   `uv.lock` / `pyproject.toml` (Community Cloud supports uv). The optional
+   `dense` extra is **not** installed and the auto-seeded profiles
+   (`paragraph` and `clause_aware`) are lexical-only, so the live demo runs on
+   BM25: selecting `dense`/`hybrid` returns a clear `422 profile_not_dense` (a
+   degenerate dense profile would instead return `503 dense_unavailable`), and
+   the Reranking Laboratory returns a clear `503 reranker_unavailable`. Because
+   the extra is absent, dense/hybrid/reranked *evaluation runs* are disabled too
+   — the recorded SciFact and legal experiments still display.
+4. Add these **secrets** in the Cloud app settings:
+
+   ```toml
+   RAG_WORKBENCH_READ_ONLY = "true"
+   RAG_WORKBENCH_AUTOSEED_SAMPLE = "true"
+   # Optional, for the authenticated owner mode (WebAuthn passkey):
+   # RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"
+   # RAG_WORKBENCH_WEBAUTHN_RP_ID = "<the app host, e.g. rag-workbench-xxxx.streamlit.app>"
+   # RAG_WORKBENCH_WEBAUTHN_ORIGINS = '["https://rag-workbench-xxxx.streamlit.app"]'
+   # RAG_WORKBENCH_WEBAUTHN_CREDENTIALS = '<one-item JSON array, saved after bootstrap>'
+   ```
+
+   The passkey is enrolled once through a temporary bootstrap: set
+   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_ENABLED = "true"` and
+   `RAG_WORKBENCH_WEBAUTHN_BOOTSTRAP_TOKEN = "<a long random secret>"`, register a
+   passkey in the sidebar's **Owner Mode** panel, paste the returned record into
+   `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS`, then set bootstrap back to `"false"` and
+   delete the token. See §7.5.
+
+Cloud caveats: the filesystem is **ephemeral** — the SQLite index and vector
+store reset when the app sleeps or reboots (hence the auto-seed, which also
+fills in a missing demonstration profile after a code upgrade) — and the
+deep-learning dense stack is heavy for the free tier, so BM25-only is the
+default live demo. The committed datasets and recorded artifacts are located by
+finding the repository root (marker: `pyproject.toml` beside `src/rag_workbench`)
+via the module path, the working directory and `sys.path`, so they are still
+found when the package is installed non-editable rather than from the source
+tree.
+
+### 7.4 One-time passkey enrollment
 
 1. Set the relying-party identity (the app's real hostname) and origin:
 
@@ -1459,24 +1087,20 @@ and there is no repository-adjacent secret to copy.
    evaluation, also set `RAG_WORKBENCH_OWNER_EVALUATIONS_ENABLED = "true"`; the
    Evaluation Lab then shows the owner testing panel for the signed-in owner.
 
-### Recovery
+**Recovery.** If the passkey is lost, repeat the bootstrap in step 2, register a
+replacement, update `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` and disable bootstrap
+again. Registration is refused unless the bootstrap secret is presented, and
+attempts are rate-limited (default 5 per 5 minutes; auth attempts 20 per window),
+so the empty credential store cannot be claimed by an arbitrary visitor.
 
-If the passkey is lost, repeat the bootstrap in step 2, register a replacement,
-update `RAG_WORKBENCH_WEBAUTHN_CREDENTIALS` and disable bootstrap again.
-Registration is refused unless the bootstrap secret is presented, and attempts are
-rate-limited (default 5 per 5 minutes; auth attempts 20 per window), so the empty
-credential store cannot be claimed by an arbitrary visitor.
-
-### Local development
-
-Local development needs **no** passkey and no cloud authentication: the
+**Local development** needs **no** passkey and no cloud authentication: the
 Laboratory Controls session toggles and the ordinary evaluation/ingestion APIs
 work as before. Owner Mode is only meaningful on a hosted, read-only deployment;
 locally you can either skip it or register a `localhost` passkey
 (`RAG_WORKBENCH_WEBAUTHN_RP_ID=localhost`,
 `RAG_WORKBENCH_WEBAUTHN_ORIGINS=["http://localhost:8501"]`) for testing.
 
-### Provenance and limitations
+### 7.5 Provenance and limitations
 
 - Passkey cryptography is provided by py_webauthn (`documented`; the library is
   maintained and audited). The ceremony and session logic in this project is
@@ -1493,7 +1117,416 @@ locally you can either skip it or register a `localhost` passkey
 
 ---
 
-## License
+## 8. Reproducing experiments
+
+### 8.1 Ingest and search from the CLI
+
+```powershell
+# Lexical (BM25) profile
+uv run rag-workbench ingest tests/fixtures/sample_contract.txt --collection contracts
+uv run rag-workbench search "termination for convenience" --top-k 5
+
+# Dense profile: creates embeddings on ingest (downloads the model on first use)
+uv run rag-workbench ingest tests/fixtures/sample_contract.txt --collection contracts --embed
+
+# Three retrieval modes over the same query
+uv run rag-workbench search "termination for convenience" --mode bm25   --top-k 3
+uv run rag-workbench search "termination for convenience" --mode dense  --top-k 3
+uv run rag-workbench search "termination for convenience" --mode hybrid --top-k 3
+
+# Inspect the vector index and repair it if needed
+uv run rag-workbench vectors-status
+uv run rag-workbench rebuild-vectors --all
+
+# Clause-aware legal chunking and clause inspection
+uv run rag-workbench ingest tests/fixtures/legal_contract.txt --collection contracts --strategy clause_aware
+uv run rag-workbench chunks --limit 50
+
+# Cross-encoder reranking over a first-stage candidate pool
+uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --rerank --rerank-candidates 20
+uv run rag-workbench search "confidential information" --mode bm25 --top-k 3 --rerank --reranker-model cross-encoder/ms-marco-MiniLM-L6-v2
+```
+
+Try a PDF:
+
+```powershell
+uv run rag-workbench ingest "C:\path\to\contract.pdf" --collection contracts --embed
+```
+
+### 8.2 Evaluate retrieval from the CLI
+
+```powershell
+# List bundled / imported datasets
+uv run rag-workbench datasets list
+
+# Import a BEIR-format dataset from local files (no network)
+uv run rag-workbench datasets import --name mycorpus `
+  --corpus corpus.jsonl --queries queries.jsonl --qrels qrels.tsv `
+  --source "…" --license "…" --mapping document
+
+# Download the BEIR SciFact benchmark (explicit command; ~2 MB)
+uv run rag-workbench datasets download-scifact
+
+# Ingest a dataset's corpus into an index profile, then evaluate it
+uv run rag-workbench datasets ingest scifact --strategy paragraph          # lexical profile
+uv run rag-workbench datasets ingest scifact --strategy paragraph --embed  # dense profile
+
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --query-mode or --candidate-depth 20 --top-k 10 --k 1,3,5,10 `
+  --label "SciFact BM25"
+
+# Matched reranking: baseline and reranked start from the SAME 20-passage pool
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --candidate-depth 20 --top-k 10 --label "pool20 baseline"
+uv run rag-workbench eval run --dataset scifact --profile <profile-id> `
+  --mode bm25 --candidate-depth 20 --top-k 10 --rerank --rerank-candidates 20 `
+  --label "pool20 + rerank"
+
+# Inspect, diagnose, export, and commit a read-only artifact
+uv run rag-workbench eval list --dataset scifact
+uv run rag-workbench eval show <experiment-id>
+uv run rag-workbench eval failures <experiment-id>
+uv run rag-workbench eval export <experiment-id> --format csv --out run.csv
+uv run rag-workbench eval record <experiment-id> --name scifact-bm25.json
+```
+
+### 8.3 Answer from the CLI (optional, needs local Ollama)
+
+```powershell
+# Generate a grounded answer locally (requires RAG_WORKBENCH_GENERATION_ENABLED=true)
+uv run rag-workbench answer ask "What is the notice period for termination?" `
+  --collection legal-contracts --query-mode or --max-evidence 6
+
+# Run the bundled grounded-answer quality set and print the metrics.
+# --seed makes repeated runs reproducible; --label names the configuration.
+uv run rag-workbench answer quality `
+  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
+  --query-mode or --max-evidence 6 --seed 0 --label "v1 / me=6 / bm25 / or"
+
+# Record answer demos + a quality report as committed read-only artifacts
+# (--no-demos writes only the aggregate report, for a configuration sweep)
+uv run rag-workbench answer record `
+  --profile <profile-id> --dataset answer-quality/legal-contracts-answers `
+  --query-mode or --max-evidence 6 --seed 0 --label "recommended"
+
+# Inspect recorded demos with no model running
+uv run rag-workbench answer demos
+uv run rag-workbench answer demo <demo-id>
+```
+
+Answer artifacts live in `benchmarks/recorded_answers/`: one `answer_demo` JSON per
+question plus one `answer_quality` report per configuration. All carry
+`source="recorded"` so the public demo can never present them as live inference.
+The instruction wording is selectable with `RAG_WORKBENCH_ANSWER_PROMPT_VARIANT`
+(`v1` default, `v2` for the audited alternative — see §5.4). A fixed `--seed` makes
+a repeated request reproducible; leaving it unset samples normally.
+
+### 8.4 Scalability and load testing from the CLI
+
+```powershell
+# Generate a reproducible synthetic corpus to inspect on disk
+uv run rag-workbench scaling corpus --documents 500 --out data\scaling-corpus
+
+# Run bounded indexing + BM25 benchmarks and record committed artifacts.
+# No extra install: BM25 uses only the core dependencies.
+uv run rag-workbench scaling run --documents 100,1000,5000 --depths 10,50,100 --record
+
+# Compare chunking strategies on the same corpus
+uv run rag-workbench scaling run --documents 1000,5000 --strategy fixed_token `
+  --max-tokens 512 --overlap-tokens 64 --record
+
+# Capacity model for ~10M documents (storage + optional ingestion projection).
+# Defaults for throughput/overheads are illustrative assumptions (basis "assumed").
+uv run rag-workbench scaling capacity --documents 10000000 --scenario typical
+uv run rag-workbench scaling capacity --documents 10000000 --scenario typical `
+  --documents-per-day 100000 --embedding-chunks-per-second-per-worker 20 --workers 4
+
+# Inspect recorded baselines with no API or model running
+uv run rag-workbench scaling list
+uv run rag-workbench scaling show <benchmark-id>
+
+# Bounded SMOKE-level load test against a LOCAL server (never the public demo).
+# A warm-up phase is excluded, and per-endpoint latency is reported.
+uv run rag-workbench serve            # in another terminal
+uv run rag-workbench scaling load-test --url http://127.0.0.1:8765 --workload mixed `
+  --users 4 --duration 10 --warmup 2
+```
+
+`scaling run` refuses to index more than `RAG_WORKBENCH_SCALING_MAX_DOCUMENTS`
+documents (default 20,000), so an accidental run cannot exhaust local storage.
+Every recorded artifact carries the code revision and whether the working tree was
+clean (`provenance`); a run from a dirty tree is flagged rather than presented as a
+clean revision.
+
+`rag-workbench scaling load-test` uses only `httpx`. Its numbers are a
+**smoke-level, single-machine observation** of **HTTP/API throughput across
+endpoints** — they are **not** RAG generation throughput, not retrieval throughput,
+and not a latency SLO. For richer reporting the same read-only workloads are
+available through the optional Locust definition:
+
+```powershell
+uv run --extra load locust -f benchmarks\load\locustfile.py --host http://127.0.0.1:8765
+```
+
+`uv run --with locust ...` / `uv run --with psutil ...` also work without changing
+the environment. See [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md) and
+[`docs/case_studies.md`](docs/case_studies.md).
+
+### 8.5 Testing and quality
+
+```powershell
+uv run ruff check .
+uv run pytest                 # core suite; dense/real-model tests are deselected
+uv run pytest -m dense -s     # opt-in: real Sentence Transformers smoke test
+uv run pytest -m reranker -s  # opt-in: real cross-encoder reranker smoke test
+uv run pytest -m ollama -s    # opt-in: real local-Ollama generation smoke test
+```
+
+The core suite is deterministic and runs **offline** with no model downloads. The
+dense/hybrid/rerank paths are exercised end-to-end with a deterministic fake
+embedding provider and fake reranker over the **real** Qdrant local store and the
+real RRF implementation:
+
+- **Unit:** tokenizer and chunk boundaries; parsers (headings, encoding fallback,
+  empty input, malformed and image-only PDFs, unsupported extensions); the
+  clause-marker detector and clause-aware chunker (hierarchy, grouping, long-clause
+  splitting, definition grouping, overlap bounds, determinism, no content loss);
+  the untrusted-input FTS query builder; configuration and profile identity
+  (including the lexical profile hash lock and clause-aware isolation); Reciprocal
+  Rank Fusion; the vector store (idempotent upsert, dimension checks, filtering,
+  deletion, persistence across reopen); embedding laziness and dependency
+  handling; reranker wiring and laziness.
+- **Integration:** contract ingestion → exact-clause search with provenance;
+  idempotent re-ingestion; profile isolation; deletion removing relational rows,
+  FTS entries **and** vector points; dense and hybrid search with preserved
+  component ranks; `partial` recovery and rebuild; vector reconciliation of
+  missing and orphan points; clause ingestion + the chunks endpoint; reranking
+  across bm25/dense/hybrid with rank movement, tie-breaking, `rerank_candidates`
+  validation, truncation diagnostics and `reranker_unavailable`; the additive
+  schema migrations; the full HTTP round-trip with the same error mapping.
+- **Evaluation:** hand-computed IR metrics (recall/precision/MRR/nDCG/MAP and
+  candidate-pool recall) against known rankings; the dataset schemas, checksums,
+  BEIR parsing and the two relevance-mapping policies; the bundled synthetic
+  legal dataset's integrity; document-level and evidence-level evaluation
+  end-to-end over real SQLite/BM25; experiment persistence plus JSON/CSV export
+  round-trips; and the evaluation API and read-only enforcement (a mutating
+  endpoint returns `403 read_only_mode`).
+- **Answer:** context selection (sequential `[S#]` ids, duplicate and
+  containment de-duplication, `max_evidence` and token-budget exclusion with an
+  explicit reason for every dropped passage); deterministic citation verification
+  (unknown ids, uncited claims, `answered`-without-citations, **strict citation
+  parsing** so a string merely *containing* an id is rejected as malformed, and the
+  semantic-support and answer-vs-claims properties always reported `not_determined`);
+  reference-evidence coverage (`never_retrieved` / `retrieved_but_excluded` /
+  `included`, with partial vs. complete coverage kept distinct); the prompt trust
+  boundary and both instruction variants (retrieved text appears only in the
+  delimited user message, never in the trusted system instructions); the Ollama
+  adapter over an in-memory HTTP transport (model listing, availability, schema-valid
+  parsing, code-fence recovery, malformed / HTTP-error / timeout error results, and
+  remote-endpoint refusal); the recorded-artifact loader (demos and multiple quality
+  reports); the grounded-answer quality runner and its aggregation; and the API —
+  grounded answer, unknown-citation flagging, `generation_error`, `503` when
+  generation is disabled or unavailable, `403 read_only_mode`, empty-evidence
+  abstention, and the recorded demos / quality / quality-reports endpoints.
+- **Laboratory Controls:** the three-state capability block on `/v1/config`
+  (each capability reports `available` / `permitted` with a reason, and never a
+  session toggle — so session state cannot be confused with a deployment
+  permission); the server-side owner policy (default clamping to the bounds, BM25
+  forcing, dataset allowlist, and rejection of over-limit queries / depth / top-k
+  and a second concurrent job); owner authorization (feature disabled → `403`,
+  no session → `401`); passkey authentication (bootstrap required to register,
+  single-use challenge replay rejected, a wrong origin rejected, logout revokes);
+  a bounded owner evaluation running **real** BM25 over the bundled fixture on an
+  otherwise read-only deployment; and that no request — including refused
+  mutations — mutates the deployment's permissions or leaks the bootstrap secret,
+  public key or session token.
+- **Dense (opt-in, `-m dense`):** the real `all-MiniLM-L6-v2` model builds a dense
+  profile for the sample contract and returns the expected top clause.
+- **Reranker (opt-in, `-m reranker`):** the real
+  `cross-encoder/ms-marco-MiniLM-L6-v2` model reranks a real candidate list,
+  keeping retrieval and rerank scores separate and reporting its own timings.
+- **Ollama (opt-in, `-m ollama`):** the real local model answers a question over a
+  real ingested contract and the reply passes structural and citation verification
+  (skipped when Ollama or the model is unavailable).
+
+Run the tests to see the current numbers on your machine; this README does not
+pin a pass count.
+
+### 8.6 Chunking strategies
+
+Three strategies are implemented:
+
+- **`fixed_token`** — sliding token windows of `max_tokens` with `overlap_tokens`
+  overlap. Windows never cross a parsed block boundary, so page and section
+  provenance stay exact.
+- **`paragraph`** (default) — recursive/paragraph-aware packing: whole paragraphs
+  are packed up to the budget, a paragraph that alone exceeds the budget is
+  split with fixed windows, and a bounded trailing-token overlap is carried into
+  the next chunk. Chunks never span a section boundary.
+- **`clause_aware`** — structure-aware chunking for English legal documents. It
+  recognises numbered sections (`2.1`, `2.1.3`), `(a)` subsections, `ARTICLE IV`,
+  `SCHEDULE` / `ANNEX` / `APPENDIX` / `EXHIBIT` headings and definition entries
+  (`"Term" means ...`); groups the paragraphs that belong to one clause while they
+  fit the budget; splits a long clause with fixed windows while keeping its parent
+  identity; carries a bounded overlap only *within* the same clause; and records
+  `section_number`, `section_title`, `parent_clause` and `section_level` when they
+  can be derived. A heading line that would otherwise become a heading-only chunk
+  is merged with the content that follows; if it cannot be, it is kept with a
+  diagnostic rather than dropped. Detection is conservative (a stray number, date,
+  amount or lowercase continuation is not a heading), deterministic and
+  model-free — it is a structural **heuristic**, not a contract interpreter, and
+  unrecognised text is never discarded.
+
+`clause_aware` has its own profile identity (the strategy is part of the config
+hash), so it shares no chunks or vectors with `paragraph`/`fixed_token`.
+
+**What "token" means here.** Token counting uses a **regex word tokenizer** (`\w+`
+plus individual punctuation marks). It is a real, deterministic unit that requires
+no download, so chunk boundaries are reproducible and testable offline. It is
+**not** the same as a BPE tokenizer such as GPT's `tiktoken` or a Llama tokenizer,
+so token counts will differ from those models. The embedding model applies its own
+tokenizer at encode time; inputs longer than the model's sequence limit are
+counted and reported as a diagnostic rather than silently truncated without
+notice. Character counts are never used as token counts.
+
+---
+
+## 9. Limitations and non-goals
+
+- **SQLite, single writer.** Concurrency is limited to one writer process; there
+  are no distributed transactions, job queue or public-facing authentication.
+  This is a local prototype.
+- **Vector store is single-owner.** Qdrant *local mode* takes an exclusive lock on
+  its storage directory, so one process owns `data/qdrant` at a time. The process
+  caches one client per path and closes it on shutdown. Running the API and a
+  simultaneous ingest CLI against the same `DATA_DIR` is not supported; treat the
+  running API as the owner and drive ingestion through it.
+- **Model download and load cost.** The first dense ingest downloads the model
+  (one time, cached by Hugging Face); the first reranked search downloads the
+  cross-encoder (one time). Loading either model is the dominant first-call
+  latency; the API keeps them warm in-process, while each CLI invocation reloads
+  them, so CLI timings include model load. `timings_ms.rerank_init` reports the
+  one-off initialization separately from steady-state `rerank_inference`.
+- **Dense indexing is in-process and sequential.** There is no background worker
+  or queue; a very large corpus would block the request. Rebuild batches are
+  bounded for memory, not run in parallel.
+- **Cosine only.** The vector store is created with cosine distance; other
+  metrics are rejected rather than silently ignored.
+- **No OCR.** Scanned/image-only PDFs yield zero blocks plus a diagnostic; no
+  text is invented. Table extraction is not attempted.
+- **Heading detection is heuristic.** Markdown ATX headings and a conservative
+  numbered-heading pattern (`2.1 Definitions`); it is not a universal contract
+  parser. Ambiguous parses surface as `section_path = None` rather than a guess.
+  The `clause_aware` chunker adds its own conservative marker detection on top of
+  the parser but is still a heuristic.
+- **`section_path` is not OCR'd from layout** and page numbers are unknown
+  (`None`) for plain text, where the concept does not apply.
+- **Reranker scores are logits, not probabilities.** A cross-encoder produces an
+  unbounded relevance logit; it orders candidates well but is not a calibrated
+  confidence and should not be read as a percentage. The default reranker is a
+  small English MS MARCO model, so non-English and highly technical clauses are
+  out of its training distribution.
+- **Migrations are additive only.** New nullable columns are added automatically;
+  destructive or type-changing migrations are not yet handled (no Alembic).
+- **Uploads are processed in memory** up to the size limit; there is no
+  streaming ingest path yet.
+- **Optional answer generation is local, small and non-deterministic.** Live
+  generation needs a separately installed Ollama; the app never downloads a model.
+  Answers come from the configured local model and are **not** guaranteed correct:
+  the pipeline verifies *structure* and *citation ids* deterministically but cannot
+  verify that a cited passage *semantically supports* a claim, so
+  `semantic_support` is always reported as `not_determined`. A small model can
+  answer a question the passages do not support (see §5.4), add unsupported claims,
+  or — as observed with 1.5B Qwen — fail citation-id formatting unless the output
+  schema constrains it (the schema now uses a `pattern` so decoding emits `S#`). Its
+  abstention behaviour is also **not stable**: the same prompt and configuration can
+  abstain on one run and not another (§5.4), so a single recorded number is a draw,
+  not a property.
+  Generation is refused in read-only mode and when disabled, so the public demo is
+  not a model endpoint. Prompt-based defences reduce, but do not eliminate,
+  prompt-injection risk from retrieved text.
+- **Scalability measurements are single-node and synthetic.** The performance
+  harness measures the *current prototype* on one machine over a generated corpus;
+  the numbers characterise cost, not relevance, and are not a production
+  throughput claim. Each recorded artifact names its code revision and whether the
+  working tree was clean, so a dirty-tree run is never presented as a clean
+  revision. The 10M-document capacity model is **deterministic arithmetic over
+  stated assumptions**, not a simulation: its default throughput and overhead
+  values are labelled `assumed`, and `keeps_up` is a conditional projection, not a
+  demonstrated capability. Process memory is only measured when `psutil` is
+  installed; otherwise RSS is reported as not measured and the Python-heap peak is
+  never extrapolated to it. The proposed distributed architecture is **design
+  only** — none of PostgreSQL, a distributed lexical engine, a queue or a Qdrant
+  server is implemented or required. Dense/hybrid/rerank scaling is not measured.
+  Load testing targets a **locally controlled** server, never the public demo, and
+  reports smoke-level HTTP/API throughput, not generation throughput.
+- `/v1/search` rejects unknown `mode` values with a clear message rather than
+  pretending to support them.
+- **Evaluation scope.** The metrics, diagnostics and failure explorer operate on
+  **stored datasets** with explicit relevance judgments; they are not a
+  leaderboard and the bundled legal set is a small synthetic fixture, not a
+  legal-validity benchmark. SciFact is the only external benchmark imported, and
+  its retrieval depth is a **chunk** count, so a document-level metric at K may
+  need a deeper chunk pool than K (reported separately as candidate-pool recall).
+  Diagnostic categories are rule-based over observable evidence and fall back to
+  `unresolved` rather than inferring a cause; a diagnosis is a navigation aid,
+  not a verified root cause.
+- **BM25 term combination matters.** The interactive default is `and` (every
+  term must appear), which is brittle for long natural-language queries; the
+  evaluation default is `or`. The measured difference is reported in
+  §5.3 and is a property of this lexical stack, not a universal BM25 result.
+
+---
+
+## 10. Documentation and license
+
+### 10.1 Repository layout
+
+```text
+src/rag_workbench/
+  config.py            Settings + index-profile identity
+  embeddings.py        Sentence Transformers provider (lazy) + factory
+  reranking.py         Cross-encoder reranker (lazy) + factory
+  logging_config.py    Structured JSON logging
+  cli.py               rag-workbench CLI
+  domain/              schemas, Protocol interfaces, typed errors
+  persistence/         SQLAlchemy models, engine, FTS5 schema, vector store
+  ingestion/           parsers, chunkers (incl. clause-aware), pipeline, vector indexer
+  retrieval/           BM25, dense, hybrid (RRF), retrieval service (+ rerank stage)
+  evaluation/          metrics, datasets, diagnostics, runner, experiments, service
+  answering/           context selection, prompt trust boundary (v1/v2 variants),
+                       Ollama adapter, citation verification, reference-evidence
+                       coverage, pipeline, quality eval, recorded artifacts
+  scaling/             synthetic corpus generator, performance harness, capacity
+                       model, load-testing harness, architecture design data,
+                       recorded-benchmark loading, application service
+  api/                 FastAPI factory, dependencies, routes
+ui/streamlit_app.py    Thin HTTP client
+ui/local_backend.py    In-process API for single-process (Streamlit Cloud) deploys
+datasets/              Committed evaluation datasets (bundled legal-contracts,
+                       answer-quality set)
+docs/                  scaling_to_10m.md (10M-document design), case_studies.md
+benchmarks/recorded/   Committed experiment artifacts for the read-only demo
+benchmarks/recorded_answers/  Committed recorded answer demos + quality reports
+benchmarks/recorded_scaling/  Committed scalability baselines
+benchmarks/load/       Optional Locust load-test definition
+tests/                 unit + integration tests, tiny redistributable fixtures
+.github/workflows/ci.yml
+```
+
+### 10.2 Further reading
+
+- [`docs/case_studies.md`](docs/case_studies.md) — engineering failures and design
+  traps with their evidence, root cause, fix and residual risk.
+- [`docs/scaling_to_10m.md`](docs/scaling_to_10m.md) — the ~10M-document design
+  case study (design only; the prototype does not serve that scale).
+- [`benchmarks/README.md`](benchmarks/README.md) — the record schema, evaluation
+  policy and the exact recorded artifacts under `benchmarks/`.
+- [`datasets/legal-contracts/README.md`](datasets/legal-contracts/README.md) and
+  [`datasets/answer-quality/README.md`](datasets/answer-quality/README.md) — the
+  bundled synthetic datasets.
+
+### 10.3 License
 
 MIT. The bundled `tests/fixtures/sample_contract.txt` and
 `tests/fixtures/legal_contract.txt` are synthetic, redistributable documents
