@@ -56,6 +56,17 @@ deep-learning extra, an ephemeral filesystem). That constraint is surfaced in th
 app rather than hidden, and it splits the experience into what is computed live
 and what is served from committed artifacts.
 
+The app is organised around a visitor's path rather than the implementation
+stack: **Home** introduces the problem and links to the three most likely first
+actions; **Try It** runs a guided BM25 search; **Compare Methods** explains
+lexical, dense and hybrid retrieval beside the recorded benchmark results;
+**Answers & Evidence** shows recorded grounded-answer runs and the citation
+caveat; **Research & Results** collects the measured figures with drill-down;
+**Advanced Laboratory** keeps the full technical toolset; and **Owner Mode**
+explains the passkey-protected operator area. The operating mode (public/read-only
+versus local) is stated once in the sidebar, and capability switches appear only
+when they can actually be used.
+
 ### 2.1 Live in the hosted app
 
 - **BM25 lexical search** over the bundled sample corpus, which is auto-seeded on
@@ -69,7 +80,8 @@ and what is served from committed artifacts.
 - **The deterministic capacity calculator** (`POST /v1/scaling/capacity`). It is
   pure arithmetic over stated assumptions and mutates nothing, so it works in
   read-only mode.
-- **Laboratory Controls** (the per-session availability/permission panel) and the
+- **Session controls** (the per-session availability/permission panel, shown only
+  when a capability is actually permitted) and the
   **deployment diagnostics** expander, which reports the backend build revision
   and compares it to the source tree.
 
@@ -148,7 +160,8 @@ committed artifacts that the app displays, with each record labelled
   Generation is refused in read-only mode and when it is disabled, so the public
   demo — which serves **recorded** answer runs and a grounded-answer quality
   report — never becomes a model endpoint.
-- **Laboratory Controls** — a per-session sidebar panel that switches evaluation
+- **Session controls** — a per-session sidebar panel (shown only when a capability
+  is permitted) that switches evaluation
   runs, live generation and document ingestion on or off *without editing
   configuration*. Three states stay distinct: *available* (the dependency/model is
   present), *permitted* (the deployment's configuration and authorization allow
@@ -969,7 +982,7 @@ process and cannot run a separate FastAPI process:
   `git`, `git-file` or `source-hash`) and compares the revision to the source
   tree on disk. If a hot reload left an older backend process running, the
   mismatch appears as a warning instead of the app silently serving stale code.
-- The **Laboratory Controls** panel is per-session and cannot grant a permission
+- The **Session controls** panel is per-session and cannot grant a permission
   the backend refuses. In read-only mode its evaluation/generation/ingestion
   toggles are disabled and explain why, and the public app still returns `403`
   for every privileged request.
@@ -1094,7 +1107,7 @@ attempts are rate-limited (default 5 per 5 minutes; auth attempts 20 per window)
 so the empty credential store cannot be claimed by an arbitrary visitor.
 
 **Local development** needs **no** passkey and no cloud authentication: the
-Laboratory Controls session toggles and the ordinary evaluation/ingestion APIs
+Session controls toggles and the ordinary evaluation/ingestion APIs
 work as before. Owner Mode is only meaningful on a hosted, read-only deployment;
 locally you can either skip it or register a `localhost` passkey
 (`RAG_WORKBENCH_WEBAUTHN_RP_ID=localhost`,
@@ -1328,7 +1341,7 @@ real RRF implementation:
   grounded answer, unknown-citation flagging, `generation_error`, `503` when
   generation is disabled or unavailable, `403 read_only_mode`, empty-evidence
   abstention, and the recorded demos / quality / quality-reports endpoints.
-- **Laboratory Controls:** the three-state capability block on `/v1/config`
+- **Session controls:** the three-state capability block on `/v1/config`
   (each capability reports `available` / `permitted` with a reason, and never a
   session toggle — so session state cannot be confused with a deployment
   permission); the server-side owner policy (default clamping to the bounds, BM25

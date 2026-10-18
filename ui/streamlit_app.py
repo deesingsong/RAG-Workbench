@@ -145,10 +145,22 @@ def _laboratory_control(
 
 
 def render_laboratory_controls(cfg: dict) -> None:
-    """Session-only Laboratory Controls (never global deployment configuration)."""
+    """Session-only Laboratory Controls (never global deployment configuration).
+
+    On a read-only public deployment every capability is unavailable, so the panel
+    would be a stack of permanently disabled switches. It is shown only when at
+    least one capability is genuinely permitted for this session; the deployment's
+    operating mode is explained once, in the sidebar.
+    """
 
     laboratory = cfg.get("laboratory") or {} if isinstance(cfg, dict) else {}
-    with st.sidebar.expander("Laboratory Controls", expanded=False):
+    permitted_any = any(
+        bool((laboratory.get(name) or {}).get("permitted"))
+        for name in ("evaluation", "generation", "ingestion")
+    )
+    if not permitted_any:
+        return
+    with st.sidebar.expander("Session controls", expanded=False):
         st.caption(
             "Per-session switches. They change only what this browser session runs, "
             "never the deployment's configuration or permissions."
@@ -248,7 +260,7 @@ def render_corpus() -> None:
         documents = body.get("documents", [])
         st.subheader(f"Indexed documents ({body.get('total', 0)})")
         if documents:
-            st.dataframe(documents, use_container_width=True)
+            st.dataframe(documents, width="stretch")
         else:
             st.caption("No documents yet.")
 
@@ -257,7 +269,7 @@ def render_corpus() -> None:
         st.subheader("Index profiles")
         profiles = body.get("profiles", [])
         if profiles:
-            st.dataframe(profiles, use_container_width=True)
+            st.dataframe(profiles, width="stretch")
         else:
             st.caption("No profiles yet.")
 
@@ -314,12 +326,145 @@ def _render_hits(body: dict) -> None:
             )
 
 
-def render_search() -> None:
-    st.header("Search playground")
+def _rw_set_query(value: str) -> None:
+    """Example-question callback: set the query before the next script run."""
+
+    st.session_state["try_query"] = value
+
+
+def _rw_search_error(status: int, body: object) -> str:
+    code = body.get("error") if isinstance(body, dict) else None
+    if status == 0:
+        return "Could not reach the API. The backend may not be running."
+    if code in {"profile_not_dense", "dense_unavailable"} or status in {422, 503}:
+        return (
+            "That retrieval mode needs a local embedding model, which this demo does "
+            "not run. Choose the lexical (BM25) mode."
+        )
+    return f"Search failed ({status}): {body}"
+
+
+def _rw_friendly_hits(body: dict) -> None:
+    """Render search results for a visitor: title, excerpt, location, rank."""
+
+    hits = body.get("hits", [])
+    st.caption(
+        f"{len(hits)} passage(s) retrieved • mode {body.get('mode')} • "
+        f"query mode {body.get('query_mode')} • {body.get('total_ms')} ms"
+    )
+    for hit in hits:
+        where = hit.get("source_name", "?")
+        if hit.get("page_start") is not None:
+            where += f", page {hit['page_start']}"
+        if hit.get("section_path"):
+            where += f" — {hit['section_path']}"
+        elif hit.get("section_number"):
+            where += f" — section {hit['section_number']}"
+        st.markdown(f"**#{hit['rank']} · {where}**")
+        excerpt = " ".join((hit.get("text") or "").split())
+        st.write(excerpt if len(excerpt) <= 700 else excerpt[:700] + "…")
+        with st.expander("Why did this passage appear?"):
+            st.caption(
+                "BM25 ranks passages by how well their terms match your query, "
+                "weighting terms that are rare across the corpus more heavily. A "
+                "higher score is a stronger lexical match — it is not a claim about "
+                "truth or semantic relevance."
+            )
+            st.caption(
+                f"score {hit.get('score_kind', 'bm25')}={hit['score']:.4f} • "
+                f"bm25_rank={hit.get('bm25_rank')} • dense_rank={hit.get('dense_rank')} • "
+                f"chunk_id={hit.get('chunk_id')} • document_id={hit.get('document_id')}"
+            )
+
+
+def _rw_guided_search(profiles: list[dict]) -> None:
+    """The guided 'Try It' experience over the bundled corpus."""
+
+    dense_ready = any(p.get("embedding_model") for p in profiles)
+    labels = {f"{p['profile_id']} • {p['name']}": p["profile_id"] for p in profiles}
+    st.session_state.setdefault("try_query", _EXAMPLE_QUESTIONS[0])
+    st.text_input(
+        "Your question",
+        key="try_query",
+        help="Plain-language questions work best.",
+    )
+    st.caption("Examples — click to load:")
+    example_columns = st.columns(len(_EXAMPLE_QUESTIONS))
+    for index, example in enumerate(_EXAMPLE_QUESTIONS):
+        short = example if len(example) <= 34 else example[:33] + "…"
+        example_columns[index].button(
+            short,
+            key=f"try-example-{index}",
+            help=example,
+            on_click=_rw_set_query,
+            args=(example,),
+        )
+
+    with st.expander("Advanced retrieval settings", expanded=False):
+        selected = st.selectbox("Profile", list(labels.keys()), key="try_profile")
+        modes = ["bm25"] + (["dense", "hybrid"] if dense_ready else [])
+        if not dense_ready:
+            st.caption(
+                "Dense and hybrid modes need a local embedding model, so only lexical "
+                "(BM25) search runs on the public demo."
+            )
+        mode = st.selectbox("Mode", modes, key="try_mode")
+        query_mode = st.selectbox(
+            "Query mode",
+            ["and", "or"],
+            index=1,
+            key="try_qmode",
+            help=(
+                "'or' matches any term and is the friendlier default for full "
+                "questions; 'and' requires every term and suits keyword queries."
+            ),
+        )
+        top_k = st.slider("Results to show", 1, 20, 5, key="try_topk")
+
+    query = st.session_state.get("try_query") or ""
+    if not st.button("Search", key="try_run", type="primary") or not query.strip():
+        return
+    payload = {
+        "query": query,
+        "profile_id": labels[selected],
+        "top_k": int(top_k),
+        "mode": mode,
+        "query_mode": query_mode,
+    }
+    status, body = api_post("/v1/search", json=payload)
+    if status != 200:
+        st.error(_rw_search_error(status, body))
+        return
+    assert isinstance(body, dict)
+    _rw_friendly_hits(body)
+
+
+def render_search(guided: bool = False) -> None:
+    if guided:
+        st.header("Try document search")
+        st.markdown(
+            "Ask a question in plain language. The workbench searches the indexed "
+            "corpus and shows the passages it retrieved — the first step any RAG "
+            "system performs before it generates an answer."
+        )
+        st.caption(
+            "The public demo searches a small bundled sample contract with lexical "
+            "(BM25) search, which matches the words in your question against the "
+            "documents and needs no model download."
+        )
+    else:
+        st.header("Search playground")
+        st.caption(
+            "Raw lexical/dense/hybrid search over any indexed profile, with component "
+            "ranks and timings. For a guided introduction, use **Try It**."
+        )
     status, body = api_get("/v1/profiles")
     profiles = body.get("profiles", []) if status == 200 and isinstance(body, dict) else []
     if not profiles:
-        st.warning("No index profiles yet — ingest a document first.")
+        st.warning("Nothing is indexed yet — ingest a document first.")
+        return
+    if guided:
+        _rw_guided_search(profiles)
         return
 
     labels = {f"{p['profile_id']} • {p['name']}": p["profile_id"] for p in profiles}
@@ -359,57 +504,7 @@ def render_search() -> None:
 def render_compare() -> None:
     st.header("Mode comparison")
     st.caption("Runs the same query through all three modes and reports rank overlap.")
-    status, body = api_get("/v1/profiles")
-    profiles = body.get("profiles", []) if status == 200 and isinstance(body, dict) else []
-    dense_ready = [p for p in profiles if p.get("embedding_model")]
-    if not dense_ready:
-        st.warning("No dense profiles yet — ingest a document with 'Build a dense profile' enabled.")
-        return
-
-    labels = {f"{p['profile_id']} • {p['name']}": p["profile_id"] for p in dense_ready}
-    query = st.text_input("Query", value="termination for convenience", key="compare_query")
-    selected = st.selectbox("Dense profile", list(labels.keys()), key="compare_profile")
-    top_k = st.slider("Top K", min_value=1, max_value=10, value=5, key="compare_topk")
-
-    if not st.button("Compare") or not query.strip():
-        return
-
-    results: dict[str, list[dict]] = {}
-    for mode in ("bm25", "dense", "hybrid"):
-        status, body = api_post(
-            "/v1/search",
-            json={
-                "query": query,
-                "profile_id": labels[selected],
-                "top_k": int(top_k),
-                "mode": mode,
-            },
-        )
-        if status != 200:
-            st.error(f"{mode} failed ({status}): {body}")
-            return
-        assert isinstance(body, dict)
-        results[mode] = body.get("hits", [])
-
-    columns = st.columns(3)
-    for column, mode in zip(columns, ("bm25", "dense", "hybrid"), strict=True):
-        with column:
-            st.subheader(mode.upper())
-            for hit in results[mode]:
-                st.markdown(
-                    f"**#{hit['rank']}** `{hit['score']:.4f}` — {hit['source_name']}  "
-                )
-                st.caption(" ".join(hit["text"].split())[:160])
-
-    bm25_ids = [hit["chunk_id"] for hit in results["bm25"]]
-    dense_ids = [hit["chunk_id"] for hit in results["dense"]]
-    hybrid_ids = [hit["chunk_id"] for hit in results["hybrid"]]
-    if bm25_ids and dense_ids:
-        overlap = len(set(bm25_ids) & set(dense_ids))
-        st.info(
-            f"BM25∩dense in top-{top_k}: {overlap} chunk(s). "
-            f"Hybrid kept {len(set(hybrid_ids) & (set(bm25_ids) | set(dense_ids)))} known chunk(s)."
-        )
+    _rw_live_mode_comparison()
 
 
 def _profile_options() -> list[dict]:
@@ -515,7 +610,7 @@ def _render_rank_table(hits: list[dict]) -> None:
             }
         )
     if rows:
-        st.dataframe(rows, use_container_width=True)
+        st.dataframe(rows, width="stretch")
 
 
 def render_reranking_lab() -> None:
@@ -680,7 +775,7 @@ def _metric_table(values: dict, *, key: str) -> None:
         return
     st.dataframe(
         [{"metric": name, "value": round(float(value), 4)} for name, value in sorted(values.items())],
-        use_container_width=True,
+        width="stretch",
         key=key,
     )
 
@@ -706,7 +801,7 @@ def _render_dataset_browser() -> None:
             }
             for d in datasets
         ],
-        use_container_width=True,
+        width="stretch",
         key="evaluation-datasets",
     )
 
@@ -802,7 +897,7 @@ def _render_experiment_detail(record: dict) -> None:
     st.markdown("**Counts**")
     st.dataframe(
         [{"key": k, "value": v} for k, v in counts.items()],
-        use_container_width=True,
+        width="stretch",
         key=f"counts-{record.get('experiment_id')}",
     )
     left, right = st.columns(2)
@@ -975,7 +1070,7 @@ def render_evaluation_lab() -> None:
             }
             for e in experiments
         ],
-        use_container_width=True,
+        width="stretch",
         key="evaluation-experiments",
     )
     labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
@@ -1258,97 +1353,18 @@ def _render_quality_report_comparison() -> None:
 def render_answer_lab() -> None:
     st.header("Answer Laboratory")
     st.caption(
-        "Optional evidence-grounded answer generation over the retrieved passages, "
-        "with deterministic citation verification. The intended public deployment is "
-        "read-only and serves recorded runs; nothing here uploads documents or calls "
-        "a paid API."
+        "The technical view of grounded answer generation: the retrieval-to-answer "
+        "pipeline, deterministic citation verification and the recorded quality "
+        "reports. For an introduction, use **Answers & Evidence**."
     )
     status, cfg = api_get("/v1/config")
-    if status == 200 and isinstance(cfg, dict):
-        st.caption(
-            f"generation_enabled {cfg.get('generation_enabled')} • "
-            f"generation_available {cfg.get('generation_available')} • "
-            f"recorded demos {cfg.get('recorded_answer_demos')}"
-        )
+    cfg = cfg if status == 200 and isinstance(cfg, dict) else {}
     st.divider()
     _render_answer_quality()
     st.divider()
-
-    lab_generation = (
-        ((cfg.get("laboratory") or {}).get("generation")) if isinstance(cfg, dict) else {}
-    ) or {}
-    generation_permitted = isinstance(cfg, dict) and bool(
-        cfg.get("generation_enabled")
-    ) and not READ_ONLY and bool(lab_generation.get("permitted", False))
-    if not generation_permitted:
-        st.info(
-            lab_generation.get("reason")
-            or "Live generation is disabled on this deployment. The recorded answer "
-            "demonstrations below were produced locally with a real local model and "
-            "committed as artifacts."
-        )
-    elif not LAB_GENERATION_ENABLED:
-        st.info(
-            "Live generation is available but switched off for this session. Enable "
-            "it in the sidebar under Laboratory Controls."
-        )
-    else:
-        with st.form("answer-form"):
-            question = st.text_area("Question", height=80)
-            profiles = _profile_options()
-            labels = _profile_labels(profiles)
-            profile_choice = st.selectbox("Index profile", ["(default)"] + list(labels.keys()))
-            columns = st.columns(4)
-            mode = columns[0].selectbox("Mode", ["bm25", "dense", "hybrid"])
-            query_mode = columns[1].selectbox("Query mode", ["and", "or"], index=1)
-            collection = columns[2].text_input("Collection filter", value="")
-            rerank = columns[3].checkbox("Rerank")
-            columns2 = st.columns(4)
-            candidate_depth = columns2[0].number_input("Candidate depth", 1, 100, 10)
-            max_evidence = columns2[1].number_input("Max evidence", 1, 20, 4)
-            context_tokens = columns2[2].number_input("Context tokens", 128, 32768, 2048, step=128)
-            submitted = st.form_submit_button("Generate grounded answer")
-
-        if submitted:
-            if not question.strip():
-                st.error("Enter a question first.")
-            else:
-                payload = {
-                    "question": question.strip(),
-                    "profile_id": labels.get(profile_choice),
-                    "mode": mode,
-                    "query_mode": query_mode,
-                    "collection": collection.strip() or None,
-                    "candidate_depth": int(candidate_depth),
-                    "max_evidence": int(max_evidence),
-                    "context_tokens": int(context_tokens),
-                    "rerank": bool(rerank),
-                }
-                answer_status, body = api_post("/v1/answer", json=payload)
-                if answer_status != 200 or not isinstance(body, dict):
-                    st.error(f"Generation unavailable ({answer_status}): {body}")
-                else:
-                    _render_answer_record(body)
-        st.divider()
-
-    st.subheader("Recorded answer demonstrations")
-    demos = _fetch_answer_demos()
-    if not demos:
-        st.caption(
-            "No recorded answer demos. Run `rag-workbench answer record` locally to "
-            "produce them."
-        )
-        return
-    labels_by_demo = {_answer_demo_label(d): d.get("demo_id") for d in demos}
-    selected = st.selectbox(
-        "Recorded run", list(labels_by_demo.keys()), key="answer-demo-select"
-    )
-    demo_id = labels_by_demo[selected]
-    detail_status, detail = api_get(f"/v1/answer-demos/{demo_id}")
-    if detail_status != 200 or not isinstance(detail, dict):
-        st.error(f"Could not load demo ({detail_status}): {detail}")
-        return
-    _render_answer_record(detail.get("demo", {}))
+    _rw_live_answer_form(cfg)
+    st.divider()
+    _rw_recorded_answer_demos()
 
 
 def render_failure_explorer() -> None:
@@ -1468,7 +1484,7 @@ def render_performance_lab() -> None:
         else:
             rows.append({"stage": stage, "value": stats})
     st.markdown("**Latency (ms)**")
-    st.dataframe(rows, use_container_width=True, key="perf-latency")
+    st.dataframe(rows, width="stretch", key="perf-latency")
 
     candidate = record.get("candidate_metrics", {})
     aggregate = record.get("aggregate", {})
@@ -1513,7 +1529,7 @@ def render_performance_lab() -> None:
                 float((record.get("aggregate") or {}).get(metric, 0.0)), 4
             )
         table.append(row)
-    st.dataframe(table, use_container_width=True, key="perf-compare-table")
+    st.dataframe(table, width="stretch", key="perf-compare-table")
 
 
 def _human_bytes(num_bytes: float | None) -> str:
@@ -1599,7 +1615,7 @@ def _render_scaling_baselines() -> None:
         )
     if rows:
         st.markdown("**Indexing footprint by corpus size**")
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
         methods = {
             (workload.get("memory") or {}).get("method")
             for workload in record.get("workloads", [])
@@ -1629,7 +1645,7 @@ def _render_scaling_baselines() -> None:
             )
     if latency_rows:
         st.markdown("**Retrieval latency by corpus size** (20 queries per configuration)")
-        st.dataframe(latency_rows, hide_index=True, use_container_width=True)
+        st.dataframe(latency_rows, hide_index=True, width="stretch")
 
     if record.get("failures"):
         st.warning("Recorded failures during this run: " + "; ".join(record["failures"]))
@@ -1710,7 +1726,7 @@ def _render_scaling_capacity() -> None:
             }
             for component in components
         ]
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
         assumed = [row["component"] for row in rows if row.get("basis") == "assumed"]
         if assumed:
             st.caption(
@@ -1730,7 +1746,7 @@ def _render_scaling_capacity() -> None:
     st.dataframe(
         [{"line": name, "size": _human_bytes(value)} for name, value in totals],
         hide_index=True,
-        use_container_width=True,
+        width="stretch",
     )
 
     ingestion = body.get("ingestion")
@@ -1777,7 +1793,7 @@ def _render_scaling_capacity() -> None:
                     "total": _human_bytes(estimate.get("total_bytes")),
                 }
             )
-        st.dataframe(rows, hide_index=True, use_container_width=True)
+        st.dataframe(rows, hide_index=True, width="stretch")
 
 
 def _render_scaling_architecture() -> None:
@@ -1830,18 +1846,606 @@ def render_scalability_lab() -> None:
         _render_scaling_architecture()
 
 
-PAGES = {
-    "Status": render_status,
-    "Corpus Manager": render_corpus,
+# --------------------------------------------------------------------------- #
+# Presentation layer
+#
+# A small, theme-aware design system and the visitor-first pages. Everything here
+# is still a thin HTTP client of the API: it calls the same endpoints the CLI
+# does and performs no retrieval, ingestion or evaluation logic itself. Recorded
+# figures are always read from the committed artifacts, never hard-coded, and are
+# labelled "recorded" so they can never be mistaken for live inference.
+# --------------------------------------------------------------------------- #
+
+# Streamlit 1.6x renders themes with generated (emotion) classes and does not expose
+# stable --background-color style variables, so the accent styling below uses neutral
+# translucent greys. A translucent grey reads correctly on both the light and dark
+# themes, and status is always carried by words ("live"/"recorded"), never by colour
+# alone.
+_APP_CSS = """
+<style>
+:root {
+  --rw-radius: 0.6rem;
+  --rw-line: rgba(127, 127, 127, 0.28);
+  --rw-fill: rgba(127, 127, 127, 0.09);
+}
+.rw-hero {
+  border: 1px solid var(--rw-line);
+  background: var(--rw-fill);
+  border-radius: var(--rw-radius);
+  padding: 1.5rem 1.7rem;
+  margin-bottom: 1.1rem;
+}
+.rw-hero h1 { margin: 0 0 0.4rem 0; }
+.rw-hero p { margin: 0; max-width: 62ch; }
+.rw-lede { font-size: 1.08rem; }
+.rw-card {
+  border: 1px solid var(--rw-line);
+  background: var(--rw-fill);
+  border-radius: var(--rw-radius);
+  padding: 1rem 1.1rem;
+  height: 100%;
+}
+.rw-card h3 { margin: 0 0 0.4rem 0; font-size: 1.05rem; }
+.rw-card p { margin: 0; }
+.rw-pill {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--rw-line);
+  background: var(--rw-fill);
+  vertical-align: middle;
+}
+</style>
+"""
+
+_OPERATING_MODE_READ_ONLY = (
+    "Public demo — search the sample corpus and browse recorded experiments. Running "
+    "new experiments requires Owner Mode or a local installation."
+)
+_OPERATING_MODE_WRITABLE = (
+    "Local installation — you can ingest documents and run new experiments."
+)
+
+_SECTIONS = [
+    "Home",
+    "Try It",
+    "Compare Methods",
+    "Answers & Evidence",
+    "Research & Results",
+    "Advanced Laboratory",
+    "Owner Mode",
+]
+
+_ADVANCED_TOOLS = [
+    "Search Playground",
+    "Mode Comparison",
+    "Chunking Laboratory",
+    "Reranking Laboratory",
+    "Evaluation Lab",
+    "Failure Explorer",
+    "Performance Lab",
+    "Scalability Laboratory",
+    "Answer Laboratory",
+    "Corpus Manager",
+    "System Status",
+]
+
+_EXAMPLE_QUESTIONS = [
+    "What is the notice period to terminate for convenience?",
+    "How long does the client have to pay an invoice?",
+    "What late-payment charge applies to overdue amounts?",
+    "What law governs this agreement?",
+    "What counts as Confidential Information?",
+]
+
+
+def inject_design_system() -> None:
+    """Apply the shared, theme-aware styling once per run."""
+
+    st.markdown(_APP_CSS, unsafe_allow_html=True)
+
+
+def _rw_navigate(section: str, tool: str | None = None) -> None:
+    """Navigation callback. Runs before the next script run, so the sidebar radio
+    reflects the requested section when it is created."""
+
+    st.session_state["nav_section"] = section
+    if tool is not None:
+        st.session_state["nav_tool"] = tool
+
+
+def _rw_badge(kind: str, text: str) -> str:
+    cls = "rw-pill rw-pill--recorded" if kind == "recorded" else "rw-pill rw-pill--live"
+    return f'<span class="{cls}">{text}</span>'
+
+
+def _rw_card(title: str, body: str) -> str:
+    return f'<div class="rw-card"><h3>{title}</h3><p>{body}</p></div>'
+
+
+def _rw_experiment_rows(experiments: list[dict]) -> list[dict]:
+    """Flatten recorded experiments into rows for an understandable table."""
+
+    rows = []
+    for experiment in experiments:
+        aggregate = experiment.get("aggregate") or {}
+        rows.append(
+            {
+                "experiment": experiment.get("experiment_id"),
+                "source": experiment.get("source"),
+                "dataset": experiment.get("dataset"),
+                "method": experiment.get("mode"),
+                "query_mode": experiment.get("query_mode"),
+                "rerank": experiment.get("rerank"),
+                "label": experiment.get("label"),
+                "recall@10": aggregate.get("recall@10"),
+                "ndcg@10": aggregate.get("ndcg@10"),
+                "mrr@10": aggregate.get("mrr@10"),
+            }
+        )
+    return rows
+
+
+def _rw_headline_metrics() -> list[tuple[str, str, str]]:
+    """Headline figures drawn from committed experiments (empty if none load)."""
+
+    experiments = _fetch_experiments()
+    best: tuple[float, float | None, dict] | None = None
+    for experiment in experiments:
+        aggregate = experiment.get("aggregate") or {}
+        ndcg = aggregate.get("ndcg@10")
+        if ndcg is None:
+            continue
+        if best is None or float(ndcg) > best[0]:
+            best = (float(ndcg), aggregate.get("recall@10"), experiment)
+    if best is None:
+        return []
+    ndcg, recall, experiment = best
+    method = f"{experiment.get('mode')}/{experiment.get('query_mode')}"
+    if experiment.get("rerank"):
+        method += " + rerank"
+    return [
+        ("Best recorded nDCG@10", f"{ndcg:.3f}", f"{method} on {experiment.get('dataset')}"),
+        (
+            "Its recall@10",
+            f"{float(recall):.3f}" if recall is not None else "—",
+            "same committed experiment",
+        ),
+        ("Recorded experiments", str(len(experiments)), "browsable without a model"),
+    ]
+
+
+def _rw_render_headline_metrics() -> None:
+    metrics = _rw_headline_metrics()
+    if not metrics:
+        return
+    columns = st.columns(len(metrics))
+    for column, (label, value, help_text) in zip(columns, metrics, strict=True):
+        column.metric(label, value, help=help_text)
+    st.caption(
+        "Recorded retrieval-evaluation figures from committed artifacts; the public "
+        "demo replays them rather than re-running the experiments."
+    )
+
+
+def render_home() -> None:
+    st.markdown(
+        """
+        <div class="rw-hero">
+          <h1>RAG Workbench</h1>
+          <p class="rw-lede">Before an AI can answer a question about your documents,
+          it needs to find the right information. RAG Workbench explores how that
+          retrieval step works &mdash; and makes its evidence inspectable.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "**What is RAG?** Retrieval-augmented generation finds relevant passages in a "
+        "corpus and puts them in front of a language model before it answers. If "
+        "retrieval misses the right passage, the answer cannot be right. So this "
+        "project concentrates on retrieval itself: chunking, indexing, ranking, "
+        "evaluation and citation checking."
+    )
+    st.markdown("#### Start here")
+    cards = [
+        (
+            "Try document search",
+            "Ask a question and read the passages that matched, with their source.",
+            "Try It",
+        ),
+        (
+            "Explore an evidence-backed answer",
+            "See a generated answer with the passages it cited and how they were checked.",
+            "Answers & Evidence",
+        ),
+        (
+            "Compare retrieval methods",
+            "See how lexical, dense and hybrid retrieval scored on real benchmarks.",
+            "Compare Methods",
+        ),
+    ]
+    columns = st.columns(3)
+    for index, (title, body, target) in enumerate(cards):
+        with columns[index]:
+            st.markdown(_rw_card(title, body), unsafe_allow_html=True)
+            st.button(
+                title,
+                key=f"home-go-{index}",
+                on_click=_rw_navigate,
+                args=(target,),
+            )
+    st.divider()
+    st.markdown("#### What the workbench demonstrates")
+    st.markdown(
+        "- **Lexical, dense and hybrid retrieval** behind one consistent rank "
+        "convention, with inspectable component ranks and stage timings.\n"
+        "- **Clause-aware chunking** for contracts, preserving section hierarchy.\n"
+        "- **A real evaluation platform** with IR metrics, candidate-pool recall, "
+        "matched reranking comparisons and rule-based failure diagnostics.\n"
+        "- **Evidence-grounded answers** with deterministic citation verification "
+        "that reports what it cannot check.\n"
+        "- **A read-only public deployment** that serves real recorded evidence."
+    )
+    _rw_render_headline_metrics()
+
+
+def _rw_live_mode_comparison() -> None:
+    """Run the same query through all three modes and report rank overlap."""
+
+    profiles = _profile_options()
+    dense_ready = [p for p in profiles if p.get("embedding_model")]
+    if not dense_ready:
+        st.info(
+            "A live side-by-side comparison needs a dense index. None is available on "
+            "this deployment, so the recorded results below are replayed. A local "
+            "installation with the optional embedding model can run it live."
+        )
+        return
+
+    labels = {f"{p['profile_id']} • {p['name']}": p["profile_id"] for p in dense_ready}
+    query = st.text_input("Query", value="termination for convenience", key="compare_query")
+    selected = st.selectbox("Dense profile", list(labels.keys()), key="compare_profile")
+    top_k = st.slider("Top K", min_value=1, max_value=10, value=5, key="compare_topk")
+
+    if not st.button("Compare", key="compare_run") or not query.strip():
+        return
+
+    results: dict[str, list[dict]] = {}
+    for mode in ("bm25", "dense", "hybrid"):
+        status, body = api_post(
+            "/v1/search",
+            json={
+                "query": query,
+                "profile_id": labels[selected],
+                "top_k": int(top_k),
+                "mode": mode,
+            },
+        )
+        if status != 200:
+            st.error(f"{mode} failed ({status}): {body}")
+            return
+        assert isinstance(body, dict)
+        results[mode] = body.get("hits", [])
+
+    columns = st.columns(3)
+    for column, mode in zip(columns, ("bm25", "dense", "hybrid"), strict=True):
+        with column:
+            st.subheader(mode.upper())
+            for hit in results[mode]:
+                st.markdown(
+                    f"**#{hit['rank']}** `{hit['score']:.4f}` — {hit['source_name']}  "
+                )
+                st.caption(" ".join(hit["text"].split())[:160])
+
+    bm25_ids = [hit["chunk_id"] for hit in results["bm25"]]
+    dense_ids = [hit["chunk_id"] for hit in results["dense"]]
+    hybrid_ids = [hit["chunk_id"] for hit in results["hybrid"]]
+    if bm25_ids and dense_ids:
+        overlap = len(set(bm25_ids) & set(dense_ids))
+        st.info(
+            f"BM25∩dense in top-{top_k}: {overlap} chunk(s). "
+            f"Hybrid kept {len(set(hybrid_ids) & (set(bm25_ids) | set(dense_ids)))} "
+            "known chunk(s)."
+        )
+
+
+def render_compare_methods() -> None:
+    st.header("Compare retrieval methods")
+    st.markdown(
+        "Different retrieval methods find different things. Here is what the workbench "
+        "implements, and how each scored on real benchmarks."
+    )
+    cards = [
+        (
+            "Lexical (BM25)",
+            "Matches your exact words, weighting rare terms more. Fast, interpretable "
+            "and needs no model — it is the method the public demo runs live.",
+        ),
+        (
+            "Dense (embeddings)",
+            "Matches meaning rather than words, so it finds paraphrases BM25 misses. "
+            "Needs a local embedding model, so it is shown from recorded runs here.",
+        ),
+        (
+            "Hybrid (RRF)",
+            "Fuses the two ranked lists with reciprocal rank fusion, aiming to keep "
+            "BM25's precision and dense retrieval's recall.",
+        ),
+    ]
+    columns = st.columns(3)
+    for column, (title, body) in zip(columns, cards, strict=True):
+        with column:
+            st.markdown(_rw_card(title, body), unsafe_allow_html=True)
+    st.divider()
+    st.subheader("How to read the metrics")
+    st.markdown(
+        "- **Recall@K** — how often a relevant passage appears anywhere in the top K "
+        "results.\n"
+        "- **nDCG@K** — how well relevant passages are *ordered* within the top K "
+        "(1.0 is ideal).\n"
+        "- **MRR** — how early the first relevant result appears (1.0 = always first)."
+    )
+    with st.expander("Technical definitions and caveats"):
+        st.markdown(
+            "- Metrics are computed against each dataset's relevance judgments "
+            "(`qrels`); a query without judgments is excluded from the aggregates.\n"
+            "- **Candidate recall** measures whether relevant evidence is anywhere in "
+            "the first-stage pool, before ranking — a low value points at the index or "
+            "the pool, not the ranker.\n"
+            "- A reranking comparison is only fair when the baseline and the reranked "
+            "run start from the *same* candidate pool."
+        )
+    st.divider()
+    st.markdown(
+        f"#### Run it live {_rw_badge('live', 'live')}", unsafe_allow_html=True
+    )
+    _rw_live_mode_comparison()
+    st.divider()
+    st.markdown(
+        f"#### Recorded benchmark results {_rw_badge('recorded', 'recorded')}",
+        unsafe_allow_html=True,
+    )
+    st.caption("Produced locally and committed as artifacts; the public demo replays them.")
+    experiments = _fetch_experiments()
+    if not experiments:
+        st.caption("No recorded experiments available.")
+        return
+    st.dataframe(
+        _rw_experiment_rows(experiments),
+        width="stretch",
+        key="compare-experiments",
+    )
+    labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
+    selected = st.selectbox(
+        "Inspect an experiment", list(labels.keys()), key="compare-inspect"
+    )
+    if st.button("Load full experiment", key="compare-load"):
+        status, record = api_get(f"/v1/experiments/{labels[selected]}")
+        if status == 200 and isinstance(record, dict):
+            _render_experiment_detail(record)
+        else:
+            st.error(f"Could not load experiment ({status}): {record}")
+
+
+def _rw_live_answer_form(cfg: dict) -> None:
+    """Live grounded-answer controls, shown only when the backend permits them."""
+
+    laboratory = (cfg.get("laboratory") or {}) if isinstance(cfg, dict) else {}
+    generation = laboratory.get("generation") or {}
+    permitted = (
+        isinstance(cfg, dict)
+        and bool(cfg.get("generation_enabled"))
+        and not READ_ONLY
+        and bool(generation.get("permitted", False))
+    )
+    if not permitted:
+        st.info(
+            generation.get("reason")
+            or "Live generation is disabled on this deployment. The recorded answer "
+            "demonstrations were produced locally with a real local model and "
+            "committed as artifacts."
+        )
+        return
+    if not LAB_GENERATION_ENABLED:
+        st.info(
+            "Live generation is available but switched off for this session. Enable "
+            "it in the sidebar under Session controls."
+        )
+        return
+    with st.form("answer-form"):
+        question = st.text_area("Question", height=80)
+        profiles = _profile_options()
+        labels = _profile_labels(profiles)
+        profile_choice = st.selectbox("Index profile", ["(default)"] + list(labels.keys()))
+        columns = st.columns(4)
+        mode = columns[0].selectbox("Mode", ["bm25", "dense", "hybrid"])
+        query_mode = columns[1].selectbox("Query mode", ["and", "or"], index=1)
+        collection = columns[2].text_input("Collection filter", value="")
+        rerank = columns[3].checkbox("Rerank")
+        columns2 = st.columns(4)
+        candidate_depth = columns2[0].number_input("Candidate depth", 1, 100, 10)
+        max_evidence = columns2[1].number_input("Max evidence", 1, 20, 4)
+        context_tokens = columns2[2].number_input("Context tokens", 128, 32768, 2048, step=128)
+        submitted = st.form_submit_button("Generate grounded answer")
+
+    if not submitted:
+        return
+    if not question.strip():
+        st.error("Enter a question first.")
+        return
+    payload = {
+        "question": question.strip(),
+        "profile_id": labels.get(profile_choice),
+        "mode": mode,
+        "query_mode": query_mode,
+        "collection": collection.strip() or None,
+        "candidate_depth": int(candidate_depth),
+        "max_evidence": int(max_evidence),
+        "context_tokens": int(context_tokens),
+        "rerank": bool(rerank),
+    }
+    answer_status, body = api_post("/v1/answer", json=payload)
+    if answer_status != 200 or not isinstance(body, dict):
+        st.error(f"Generation unavailable ({answer_status}): {body}")
+    else:
+        _render_answer_record(body)
+
+
+def _rw_recorded_answer_demos() -> None:
+    st.subheader("Recorded answer demonstrations")
+    demos = _fetch_answer_demos()
+    if not demos:
+        st.caption(
+            "No recorded answer demos. Run `rag-workbench answer record` locally to "
+            "produce them."
+        )
+        return
+    labels_by_demo = {_answer_demo_label(d): d.get("demo_id") for d in demos}
+    selected = st.selectbox(
+        "Recorded run", list(labels_by_demo.keys()), key="answer-demo-select"
+    )
+    demo_id = labels_by_demo[selected]
+    detail_status, detail = api_get(f"/v1/answer-demos/{demo_id}")
+    if detail_status != 200 or not isinstance(detail, dict):
+        st.error(f"Could not load demo ({detail_status}): {detail}")
+        return
+    _render_answer_record(detail.get("demo", {}))
+
+
+def render_answers_evidence() -> None:
+    st.header("Answers & evidence")
+    st.markdown(
+        "Grounded answer generation is the optional final step: after retrieving "
+        "passages, a local model drafts an answer and must cite the passages it used. "
+        "Every citation is then checked **mechanically** against the retrieved "
+        "evidence."
+    )
+    st.warning(
+        "A citation that resolves to a real passage does **not** prove that the "
+        "passage supports the claim. That is *semantic* support, which is not "
+        "deterministically decidable and is reported as `not_determined` rather than "
+        "guessed. These answers are a demonstration, not verified fact."
+    )
+    status, cfg = api_get("/v1/config")
+    cfg = cfg if status == 200 and isinstance(cfg, dict) else {}
+    with st.expander("Live generation controls", expanded=False):
+        _rw_live_answer_form(cfg)
+    st.divider()
+    _rw_recorded_answer_demos()
+    st.divider()
+    _render_answer_quality()
+
+
+def render_research_results() -> None:
+    st.header("Research & results")
+    st.markdown(
+        "Every figure in this project is measured and committed as an artifact. On the "
+        "public demo the results are replayed rather than re-run; a local installation "
+        "can reproduce them."
+    )
+    _rw_render_headline_metrics()
+    st.divider()
+    st.subheader("Recorded retrieval experiments")
+    experiments = _fetch_experiments()
+    if not experiments:
+        st.caption("No recorded experiments available.")
+    else:
+        st.dataframe(
+            _rw_experiment_rows(experiments),
+            width="stretch",
+            key="research-experiments",
+        )
+        labels = {_experiment_label(e): e["experiment_id"] for e in experiments}
+        selected = st.selectbox(
+            "Inspect an experiment", list(labels.keys()), key="research-inspect"
+        )
+        if st.button("Load full experiment", key="research-load"):
+            status, record = api_get(f"/v1/experiments/{labels[selected]}")
+            if status == 200 and isinstance(record, dict):
+                _render_experiment_detail(record)
+            else:
+                st.error(f"Could not load experiment ({status}): {record}")
+    st.divider()
+    st.subheader("Go deeper")
+    st.caption(
+        "The Advanced Laboratory keeps the full technical toolset. Nothing here is "
+        "disabled on the public demo when it only replays recorded data."
+    )
+    deeper = [
+        ("Chunking Laboratory", "Compare chunk boundaries and provenance across profiles."),
+        ("Reranking Laboratory", "Reorder a first-stage pool with a cross-encoder."),
+        ("Evaluation Lab", "Run or inspect retrieval evaluations with real IR metrics."),
+        ("Failure Explorer", "Diagnose per-query failures from observable evidence."),
+        ("Performance Lab", "Latency, pool-versus-ranking recall, and comparisons."),
+        ("Scalability Laboratory", "Recorded baselines and a capacity model."),
+    ]
+    columns = st.columns(3)
+    for index, (tool, description) in enumerate(deeper):
+        with columns[index % 3]:
+            st.markdown(_rw_card(tool, description), unsafe_allow_html=True)
+            st.button(
+                f"Open {tool}",
+                key=f"research-open-{index}",
+                on_click=_rw_navigate,
+                args=("Advanced Laboratory", tool),
+            )
+
+
+def render_owner_mode_page() -> None:
+    st.header("Owner Mode")
+    st.markdown(
+        "Owner Mode is a passkey-protected area for the project owner. It uses WebAuthn: "
+        "the device signs a challenge, and the private key never leaves it. Signing in "
+        "does **not** unlock new models or administrative server access — it only "
+        "enables bounded, owner-scoped evaluation runs on datasets the backend is "
+        "configured to allow."
+    )
+    status, cfg = api_get("/v1/config")
+    cfg = cfg if status == 200 and isinstance(cfg, dict) else {}
+    session = st.session_state.get("owner_session") or {}
+    passkey = cfg.get("passkey") or {}
+    if not passkey.get("authentication_available"):
+        st.info(
+            "Owner Mode is not configured on this deployment, so it stays locked. "
+            "Enrollment is a one-time, local setup step described in the README."
+        )
+        return
+    if session.get("authenticated"):
+        st.success("Owner Mode is unlocked for this browser session.")
+    else:
+        st.info("Owner Mode is locked. Use the Owner Mode control in the sidebar to sign in.")
+    st.caption(
+        "The sign-in and lock controls live in the sidebar, so they stay reachable from "
+        "every page."
+    )
+    st.divider()
+    st.subheader("Bounded owner testing")
+    owner = (cfg.get("laboratory") or {}).get("owner_evaluation") or {}
+    if not owner.get("permitted"):
+        st.caption("Owner evaluation runs are not enabled on this deployment.")
+    elif not session.get("authenticated"):
+        st.caption("Sign in with your passkey to run a bounded owner evaluation.")
+    else:
+        _render_owner_panel()
+
+
+_ADVANCED_PAGES = {
     "Search Playground": render_search,
     "Mode Comparison": render_compare,
     "Chunking Laboratory": render_chunking_lab,
     "Reranking Laboratory": render_reranking_lab,
-    "Answer Laboratory": render_answer_lab,
     "Evaluation Lab": render_evaluation_lab,
     "Failure Explorer": render_failure_explorer,
     "Performance Lab": render_performance_lab,
     "Scalability Laboratory": render_scalability_lab,
+    "Answer Laboratory": render_answer_lab,
+    "Corpus Manager": render_corpus,
+    "System Status": render_status,
 }
 
 
@@ -1852,6 +2456,8 @@ def main() -> None:
     READ_ONLY = server_is_read_only(API_URL)
     seed_note = None if READ_ONLY else seed_sample_if_empty(API_URL)
 
+    inject_design_system()
+
     config_status, config_body = api_get("/v1/config")
     config = config_body if config_status == 200 and isinstance(config_body, dict) else {}
     for key in ("lab_eval_enabled", "lab_generation_enabled", "lab_ingestion_enabled"):
@@ -1859,18 +2465,13 @@ def main() -> None:
 
     st.sidebar.title("RAG Workbench")
     st.sidebar.caption(
-        "BM25 • dense (Sentence Transformers) • hybrid RRF • clause-aware chunking "
-        "• cross-encoder reranking • retrieval evaluation • grounded answers "
-        "• scalability baselines & design"
+        "Inspectable retrieval: lexical, dense and hybrid search, retrieval "
+        "evaluation, and evidence-grounded answers."
     )
-    if READ_ONLY:
-        st.sidebar.info(
-            "Read-only demo: ingestion, new evaluation runs and live generation are "
-            "disabled."
-        )
+    st.sidebar.info(_OPERATING_MODE_READ_ONLY if READ_ONLY else _OPERATING_MODE_WRITABLE)
     if seed_note:
         st.sidebar.caption(seed_note)
-    render_laboratory_controls(config)
+
     st.session_state["owner_session"] = _owner.render_owner_mode(API_URL, config)
 
     laboratory = (config.get("laboratory") or {}) if config else {}
@@ -1884,9 +2485,31 @@ def main() -> None:
         laboratory.get("ingestion", {}).get("permitted")
     ) and bool(st.session_state.get("lab_ingestion_enabled"))
 
-    page = st.sidebar.radio("Navigate", list(PAGES.keys()))
-    st.title("Retrieval Laboratory")
-    PAGES[page]()
+    render_laboratory_controls(config)
+
+    st.sidebar.divider()
+    section = st.sidebar.radio("Navigate", _SECTIONS, key="nav_section")
+    if section == "Advanced Laboratory":
+        tool = st.sidebar.radio("Advanced tool", _ADVANCED_TOOLS, key="nav_tool")
+    else:
+        tool = str(st.session_state.get("nav_tool") or _ADVANCED_TOOLS[0])
+
+    if section == "Home":
+        render_home()
+    elif section == "Try It":
+        render_search(guided=True)
+    elif section == "Compare Methods":
+        render_compare_methods()
+    elif section == "Answers & Evidence":
+        render_answers_evidence()
+    elif section == "Research & Results":
+        render_research_results()
+    elif section == "Advanced Laboratory":
+        _ADVANCED_PAGES.get(tool, render_status)()
+    elif section == "Owner Mode":
+        render_owner_mode_page()
+    else:
+        render_home()
 
 
 main()
