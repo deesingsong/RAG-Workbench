@@ -361,3 +361,37 @@ def test_config_never_exposes_owner_secrets(tmp_path) -> None:
     assert "session_token" not in config.text
     assert config.json()["passkey"]["credential_configured"] is True
     assert "owner_token_configured" not in config.json()
+
+
+def test_public_config_omits_infrastructure_details(tmp_path) -> None:
+    """The public config must not disclose filesystem layout or endpoints."""
+
+    sensitive = {
+        "repo_root",
+        "bundled_datasets_dir",
+        "recorded_experiments_dir",
+        "recorded_answers_dir",
+        "recorded_scaling_dir",
+        "ollama_base_url",
+        "ollama_model",
+        "generation_available_detail",
+    }
+    with _client(tmp_path) as client:
+        cfg = client.get("/v1/config").json()
+        # A writable (operator/local) deployment can still read the locations...
+        diag = client.get("/v1/config/diagnostics")
+        assert diag.status_code == 200
+        assert "repo_root" in diag.json()
+    # ...but the public payload exposes capabilities, never paths or endpoints.
+    assert sensitive.isdisjoint(cfg)
+    assert cfg["bundled_datasets_exists"] in {True, False}
+    assert cfg["recorded_scaling_exists"] in {True, False}
+
+
+def test_config_diagnostics_refused_on_read_only_deployment(tmp_path) -> None:
+    """The public read-only demo cannot read resolved paths or endpoints."""
+
+    with _client(tmp_path, read_only=True) as client:
+        response = client.get("/v1/config/diagnostics")
+    assert response.status_code == 403
+    assert response.json()["error"] == "read_only_mode"

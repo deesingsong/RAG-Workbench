@@ -381,22 +381,16 @@ class AppConfigResponse(BaseModel):
     default_candidate_depth: int
     recorded_experiments: int
     datasets: int
-    repo_root: str = ""
-    bundled_datasets_dir: str = ""
+    # Asset-availability booleans only: absolute filesystem paths are served by
+    # the operator-only ``/v1/config/diagnostics`` route, never here.
     bundled_datasets_exists: bool = False
-    recorded_experiments_dir: str = ""
     recorded_experiments_exists: bool = False
+    recorded_answers_exists: bool = False
+    recorded_scaling_exists: bool = False
     generation_enabled: bool = False
     generation_available: bool = False
-    generation_available_detail: str = ""
-    ollama_model: str = ""
-    ollama_base_url: str = ""
     recorded_answer_demos: int = 0
-    recorded_answers_dir: str = ""
-    recorded_answers_exists: bool = False
     recorded_scaling_benchmarks: int = 0
-    recorded_scaling_dir: str = ""
-    recorded_scaling_exists: bool = False
     scaling_max_documents: int = 0
     # Laboratory Controls: per-capability availability/permission (never the
     # session toggle, which belongs to the frontend) and the non-sensitive owner
@@ -408,9 +402,22 @@ class AppConfigResponse(BaseModel):
     passkey: dict = {}
 
 
+class ConfigDiagnosticsResponse(BaseModel):
+    """Operator-only resolved locations (served only by writable deployments)."""
+
+    repo_root: str = ""
+    bundled_datasets_dir: str = ""
+    recorded_experiments_dir: str = ""
+    recorded_answers_dir: str = ""
+    recorded_scaling_dir: str = ""
+    ollama_base_url: str = ""
+    ollama_model: str = ""
+
+
 __all__ = [
     "AppConfigResponse",
     "ChunkListResponse",
+    "ConfigDiagnosticsResponse",
     "CorpusIngestRequest",
     "CorpusIngestResponse",
     "DatasetListResponse",

@@ -21,6 +21,38 @@ htmlcov/
 
 # Environment / editor
 .env
+.env.*
+!.env.example
 .idea/
 .vscode/
 Thumbs.db
+
+# Streamlit local secrets (never commit; .env.example is the template)
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml
+
+# Private keys, certificates and local credential exports
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*credentials*.json
+
+# Local owner authentication material and one-time enrollment helpers
+.rag_workbench_secrets/
+webauthn_credentials*.json
+
+# Local application databases (the shipped demo uses a runtime SQLite file)
+*.sqlite
+*.sqlite3
+*.db
+
+# Generated / temporary benchmark and evaluation output
+benchmarks/tmp/
+benchmarks/recorded_scaling/tmp/
+*.tmp
+
+# Scratch space for temporary debugging scripts and throwaway data
+scratch/

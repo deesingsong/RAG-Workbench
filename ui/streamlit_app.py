@@ -820,22 +820,18 @@ def _render_experiment_detail(record: dict) -> None:
 
 
 def _render_deployment_diagnostics() -> None:
-    """Show the resolved asset locations so a misconfigured deploy is obvious."""
+    """Show the deployment revision, and asset locations where the host allows.
+
+    The public, read-only deployment must not disclose its filesystem layout, so
+    the resolved paths come from ``/v1/config/diagnostics``, which is served only
+    by a writable (operator/local) deployment. On the public demo that route
+    returns 403 and this expander shows just the revision identity and booleans.
+    """
 
     status, cfg = api_get("/v1/config")
     if status != 200 or not isinstance(cfg, dict):
         return
-    with st.expander("Deployment diagnostics (read-only)"):
-        st.caption(
-            f"repo_root {cfg.get('repo_root')} • read_only {cfg.get('read_only')} • "
-            f"autoseed {cfg.get('autoseed_sample')} • dense_available {cfg.get('dense_available')}"
-        )
-        st.caption(
-            f"datasets {cfg.get('bundled_datasets_dir')} "
-            f"(exists={cfg.get('bundled_datasets_exists')}) • "
-            f"recorded {cfg.get('recorded_experiments_dir')} "
-            f"(exists={cfg.get('recorded_experiments_exists')})"
-        )
+    with st.expander("Deployment diagnostics"):
         backend_version = cfg.get("version")
         disk_version = on_disk_version()
         backend_revision = cfg.get("revision")
@@ -861,6 +857,27 @@ def _render_deployment_diagnostics() -> None:
                 f"Version mismatch: the API reports {backend_version} but the source "
                 f"tree is {disk_version}. A full app restart may be required to load "
                 "the current backend."
+            )
+        diag_status, diag = api_get("/v1/config/diagnostics")
+        if diag_status == 200 and isinstance(diag, dict):
+            # Writable/local deployment: full resolved locations are available.
+            st.caption(
+                f"repo_root {diag.get('repo_root')} • read_only {cfg.get('read_only')} • "
+                f"autoseed {cfg.get('autoseed_sample')} • "
+                f"dense_available {cfg.get('dense_available')}"
+            )
+            st.caption(
+                f"datasets {diag.get('bundled_datasets_dir')} "
+                f"(exists={cfg.get('bundled_datasets_exists')}) • "
+                f"recorded {diag.get('recorded_experiments_dir')} "
+                f"(exists={cfg.get('recorded_experiments_exists')})"
+            )
+        else:
+            st.caption(
+                f"read_only {cfg.get('read_only')} • autoseed {cfg.get('autoseed_sample')} • "
+                f"dense_available {cfg.get('dense_available')} • "
+                f"datasets present {cfg.get('bundled_datasets_exists')} • "
+                f"recorded experiments present {cfg.get('recorded_experiments_exists')}"
             )
 
 
@@ -1250,9 +1267,7 @@ def render_answer_lab() -> None:
     if status == 200 and isinstance(cfg, dict):
         st.caption(
             f"generation_enabled {cfg.get('generation_enabled')} • "
-            f"generation_available {cfg.get('generation_available')} "
-            f"({cfg.get('generation_available_detail')}) • "
-            f"model {cfg.get('ollama_model')} • endpoint {cfg.get('ollama_base_url')} • "
+            f"generation_available {cfg.get('generation_available')} • "
             f"recorded demos {cfg.get('recorded_answer_demos')}"
         )
     st.divider()

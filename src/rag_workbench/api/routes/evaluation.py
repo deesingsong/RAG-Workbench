@@ -271,6 +271,11 @@ def app_config(
         reason=owner_reason,
     )
 
+    # Public capability payload: only non-sensitive facts the frontend needs.
+    # Absolute filesystem paths and internal endpoints are deliberately absent --
+    # they are served by the operator-only ``/v1/config/diagnostics`` route below.
+    # The deployment revision *is* kept here: it is useful for detecting a stale
+    # backend and discloses nothing about the host filesystem.
     return {
         "read_only": settings.read_only,
         "autoseed_sample": settings.autoseed_sample,
@@ -288,30 +293,21 @@ def app_config(
         "default_candidate_depth": settings.default_candidate_depth,
         "recorded_experiments": len(service.list_experiments(include_recorded=True)),
         "datasets": len(service.list_datasets()),
-        # Deployment diagnostics: the resolved asset locations. These are paths,
-        # not secrets, and make it obvious when a deployment cannot see the
-        # committed datasets/experiments (e.g. a wrong repository root).
-        "repo_root": str(find_repo_root()),
-        "bundled_datasets_dir": str(settings.bundled_datasets_dir),
+        # Whether the committed/recorded assets were found, as plain booleans (no
+        # paths). Useful to the UI and harmless to disclose.
         "bundled_datasets_exists": settings.bundled_datasets_dir.is_dir(),
-        "recorded_experiments_dir": str(settings.recorded_experiments_dir),
         "recorded_experiments_exists": settings.recorded_experiments_dir.is_dir(),
+        "recorded_answers_exists": settings.recorded_answers_dir.is_dir(),
+        "recorded_scaling_exists": settings.recorded_scaling_dir.is_dir(),
         # Optional answer generation (Phase 5). Live generation is opt-in; the
         # public demo reports it disabled and serves recorded demos instead.
         "generation_enabled": settings.generation_enabled,
         "generation_available": bool(generation.get("available")),
-        "generation_available_detail": str(generation.get("detail", "")),
-        "ollama_model": settings.ollama_model,
-        "ollama_base_url": settings.ollama_base_url,
         "recorded_answer_demos": len(answer_demos),
-        "recorded_answers_dir": str(settings.recorded_answers_dir),
-        "recorded_answers_exists": settings.recorded_answers_dir.is_dir(),
         # Scalability (Phase 6). Recorded locally measured benchmarks plus the
         # design data are exposed read-only; the capacity calculator is pure
         # arithmetic and needs no model or extra dependency.
         "recorded_scaling_benchmarks": len(scaling_benchmarks),
-        "recorded_scaling_dir": str(settings.recorded_scaling_dir),
-        "recorded_scaling_exists": settings.recorded_scaling_dir.is_dir(),
         "scaling_max_documents": settings.scaling_max_documents,
         # Laboratory Controls (runtime capability status) and the optional owner
         # evaluation boundary. Only non-sensitive facts are exposed; the owner
@@ -326,4 +322,32 @@ def app_config(
         "owner_evaluations_enabled": settings.owner_evaluations_enabled,
         "owner_evaluation_policy": owner_service.policy.summary(),
         "passkey": owner_auth.public_summary(),
+    }
+
+
+@router.get(
+    "/config/diagnostics",
+    tags=["system"],
+    dependencies=[Depends(require_writable)],
+)
+def config_diagnostics(
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    """Resolved asset locations and internal endpoints for the operator.
+
+    Gated behind :func:`~rag_workbench.api.deps.require_writable`, so the public
+    read-only deployment returns 403 and cannot disclose its filesystem layout or
+    internal endpoints. A local/self-hosted (writable) deployment can still see
+    where its datasets, recorded artifacts and Ollama endpoint resolve, which is
+    what makes a misconfigured deploy obvious. Nothing here is a secret.
+    """
+
+    return {
+        "repo_root": str(find_repo_root()),
+        "bundled_datasets_dir": str(settings.bundled_datasets_dir),
+        "recorded_experiments_dir": str(settings.recorded_experiments_dir),
+        "recorded_answers_dir": str(settings.recorded_answers_dir),
+        "recorded_scaling_dir": str(settings.recorded_scaling_dir),
+        "ollama_base_url": settings.ollama_base_url,
+        "ollama_model": settings.ollama_model,
     }

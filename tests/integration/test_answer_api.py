@@ -254,8 +254,15 @@ def test_config_reports_generation_capabilities(settings: Settings, tmp_path: Pa
     )
     with TestClient(create_app(tuned)) as client:
         body = client.get("/v1/config").json()
+        diagnostics = client.get("/v1/config/diagnostics").json()
     assert body["generation_enabled"] is True
     assert body["generation_available"] is False
-    assert body["ollama_model"]
     assert body["recorded_answer_demos"] == 0
-    assert "recorded_answers_dir" in body
+    # The public config exposes capabilities, not infrastructure details. The
+    # resolved paths and the Ollama endpoint are operator-only and served by a
+    # separate route that the public read-only deployment refuses.
+    assert "recorded_answers_dir" not in body
+    assert "ollama_model" not in body
+    assert "ollama_base_url" not in body
+    assert diagnostics["recorded_answers_dir"].endswith("answers")
+    assert diagnostics["ollama_base_url"] == "http://127.0.0.1:9"
